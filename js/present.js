@@ -1,0 +1,425 @@
+// Presenter page: create/resume a board, show the QR code, render notes live, moderate.
+
+import * as db from "./db.js";
+import { toSortedList } from "./posts.js";
+import { renderBoard, columnsOf } from "./board.js";
+import { initThemeToggle } from "./theme.js";
+import { $, toast, show, storageGet, storageSet, boardCodeFromUrl } from "./ui.js";
+
+const LAST_BOARD_KEY = "lastBoard";
+const SORT_KEY = "pinboardSort";
+const DEFAULT_COLUMNS = ["Went well", "To improve", "Ideas"];
+const MIN_COLUMNS = 2;
+const MAX_COLUMNS = 5;
+
+const state = {
+  code: null,
+  uid: null,
+  isOwner: false,
+  meta: null,
+  posts: {},
+  pending: {},
+  likes: {},
+  sort: storageGet(SORT_KEY) || "newest",
+  printing: false,     // show note text while printing even if notes are hidden
+  unwatchPosts: null,  // non-owner viewers can read posts only once revealed
+};
+
+initThemeToggle($("#theme-toggle"));
+main().catch((err) => {
+  console.error(err);
+  toast(friendlyError(err), 6000);
+});
+
+async function main() {
+  if (!db.isConfigured) {
+    show($("#config-banner"));
+    show($("#setup"));
+    $("#start-btn").disabled = true;
+    return;
+  }
+
+  state.uid = await db.ready();
+  const code = boardCodeFromUrl();
+
+  if (code) {
+    const meta = await db.getMeta(code);
+    if (meta) return startBoard(code, meta.owner === state.uid);
+    toast(`Board ${code} was not found.`);
+    history.replaceState(null, "", location.pathname);
+  }
+  showSetup();
+}
+
+/* ---------- Setup ---------- */
+
+function showSetup() {
+  show($("#setup"));
+  $("#title-input").focus();
+
+  const last = storageGet(LAST_BOARD_KEY);
+  if (last) {
+    const link = $("#resume-link");
+    link.textContent = last;
+    link.href = `?b=${encodeURIComponent(last)}`;
+    show($("#resume"));
+  }
+
+  DEFAULT_COLUMNS.forEach((name) => addColumnInput(name));
+  $("#add-column").addEventListener("click", () => addColumnInput("").querySelector("input").focus());
+  for (const radio of document.querySelectorAll('input[name="layout"]')) {
+    radio.addEventListener("change", syncLayoutChoice);
+  }
+  syncLayoutChoice();
+
+  $("#setup-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const title = $("#title-input").value.trim();
+    if (!title) return;
+    const layout = document.querySelector('input[name="layout"]:checked').value;
+    const settings = {
+      title,
+      layout,
+      approval: $("#approval-input").checked,
+      revealed: !$("#reveal-input").checked,
+      showNames: $("#names-input").checked,
+      maxPerUser: Number($("#max-input").value),
+    };
+    if (layout === "columns") {
+      const names = [...document.querySelectorAll("#column-inputs input")]
+        .map((i) => i.value.trim().slice(0, 40))
+        .filter(Boolean);
+      if (names.length < MIN_COLUMNS) return toast(`Name at least ${MIN_COLUMNS} columns.`);
+      settings.columns = Object.fromEntries(names.map((name, order) => [`c${order + 1}`, { name, order }]));
+    }
+
+    const btn = $("#start-btn");
+    btn.disabled = true;
+    btn.textContent = "Starting…";
+    try {
+      const code = await db.createBoard(state.uid, settings);
+      history.replaceState(null, "", `?b=${code}`);
+      show($("#setup"), false);
+      startBoard(code, true);
+    } catch (err) {
+      console.error(err);
+      toast(friendlyError(err), 6000);
+      btn.disabled = false;
+      btn.textContent = "Start board";
+    }
+  });
+}
+
+function syncLayoutChoice() {
+  const columns = document.querySelector('input[name="layout"]:checked').value === "columns";
+  show($("#columns-setup"), columns);
+  for (const input of document.querySelectorAll("#column-inputs input")) input.required = columns;
+}
+
+function addColumnInput(value) {
+  const list = $("#column-inputs");
+  const li = document.createElement("li");
+  const input = document.createElement("input");
+  input.maxLength = 40;
+  input.value = value;
+  input.placeholder = "Column name";
+  input.autocomplete = "off";
+  input.setAttribute("aria-label", "Column name");
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "icon-btn small";
+  remove.textContent = "✕";
+  remove.title = "Remove column";
+  remove.addEventListener("click", () => { li.remove(); syncColumnButtons(); });
+  li.append(input, remove);
+  list.append(li);
+  syncColumnButtons();
+  syncLayoutChoice();
+  return li;
+}
+
+function syncColumnButtons() {
+  const count = $("#column-inputs").children.length;
+  $("#add-column").disabled = count >= MAX_COLUMNS;
+  for (const btn of document.querySelectorAll("#column-inputs .icon-btn")) btn.disabled = count <= MIN_COLUMNS;
+}
+
+/* ---------- Board ---------- */
+
+function startBoard(code, isOwner) {
+  state.code = code;
+  state.isOwner = isOwner;
+  if (isOwner) storageSet(LAST_BOARD_KEY, code);
+
+  show($("#board"));
+  show($("#join-pill"));
+  $("#code").textContent = code;
+  $("#pill-code").textContent = code;
+
+  const joinUrl = new URL(`join.html?b=${code}`, location.href).href;
+  $("#join-url").textContent = joinUrl.replace(/^https?:\/\//, "");
+  renderQr(joinUrl);
+
+  // Viewers who don't own the board (e.g. a second screen) get a read-only board
+  show($("#controls"), isOwner);
+  show($("#hint"), isOwner);
+  wireControls();
+
+  db.watchMeta(code, (meta) => {
+    state.meta = meta || {};
+    if (!isOwner) syncPostsListener();
+    render();
+  });
+  db.watchLikes(code, (likes) => { state.likes = likes; render(); });
+  if (isOwner) {
+    db.watchPosts(code, (posts) => { state.posts = posts; render(); }, onActionError);
+    db.watchPending(code, (pending) => { state.pending = pending; render(); }, onActionError);
+  }
+}
+
+/** Read-only viewers may read notes only while the board is revealed. */
+function syncPostsListener() {
+  const revealed = state.meta.revealed !== false;
+  if (revealed && !state.unwatchPosts) {
+    state.unwatchPosts = db.watchPosts(state.code, (posts) => { state.posts = posts; render(); }, () => {
+      state.unwatchPosts = null;
+    });
+  } else if (!revealed && state.unwatchPosts) {
+    state.unwatchPosts();
+    state.unwatchPosts = null;
+    state.posts = {};
+  }
+}
+
+function renderQr(url) {
+  const qr = qrcode(0, "M");
+  qr.addData(url);
+  qr.make();
+  $("#qr").innerHTML = qr.createSvgTag({ cellSize: 8, margin: 2, scalable: true });
+}
+
+function render() {
+  const meta = state.meta;
+  if (!meta) return;
+
+  $("#title").textContent = meta.title || "";
+  document.title = meta.title ? `${meta.title} · Live Pin Board` : "Live Pin Board";
+
+  const open = meta.open !== false;
+  const revealed = meta.revealed !== false;
+  show($("#paused-badge"), !open);
+  show($("#concealed-badge"), !revealed);
+  show($("#approval-badge"), meta.approval === true);
+  $("#pause-btn").textContent = open ? "⏸ Pause" : "▶ Resume";
+  $("#reveal-btn").textContent = revealed ? "🙈 Hide notes" : "👁 Reveal";
+  $("#reveal-btn").classList.toggle("primary", !revealed);
+  $("#approval-btn").textContent = meta.approval ? "✋ Approval: on" : "✋ Approval: off";
+  $("#names-btn").textContent = meta.showNames ? "👤 Names: on" : "👤 Names: off";
+
+  const columns = columnsOf(meta);
+  const notes = toSortedList(state.posts, state.likes, state.sort);
+  renderBoard($("#notes"), notes, {
+    columns,
+    showNames: meta.showNames === true,
+    concealed: !revealed && !state.printing,
+    actions: state.isOwner ? noteActions : null,
+    onOpen: openNote,
+    emptyText: columns.length ? "No notes yet" : "",
+  });
+  show($("#empty"), notes.length === 0 && columns.length === 0);
+
+  const pending = toSortedList(state.pending, {}, "oldest");
+  const liveLikes = notes.reduce((sum, n) => sum + n.likeCount, 0);
+  $("#stat-notes").textContent = notes.length;
+  $("#stat-people").textContent = new Set([...notes, ...pending].map((n) => n.uid)).size;
+  $("#stat-likes").textContent = liveLikes;
+
+  renderPending(pending);
+}
+
+function noteActions(note) {
+  return [
+    [note.highlighted ? "★" : "☆", note.highlighted ? "Remove highlight" : "Highlight",
+      () => db.highlightPost(state.code, note.id, !note.highlighted).catch(onActionError)],
+    ["🙈", "Hide from the board", () => db.hidePost(state.code, note)
+      .then(() => toast("Note hidden. Restore it from the sidebar."))
+      .catch(onActionError)],
+    ["🗑", "Delete", () => {
+      if (!confirm("Delete this note? This cannot be undone.")) return;
+      db.removePost(state.code, db.POSTS, note.id).catch(onActionError);
+    }],
+  ];
+}
+
+function renderPending(pending) {
+  const panel = $("#pending-panel");
+  show(panel, state.isOwner && (pending.length > 0 || state.meta.approval === true));
+  $("#pending-count").textContent = pending.length;
+  panel.querySelector("summary span").textContent = state.meta.approval ? "Waiting for approval" : "Hidden notes";
+  const waiting = pending.filter((n) => !n.hidden);
+  show($("#approve-all-btn"), waiting.length > 1);
+
+  $("#pending-list").replaceChildren(...pending.map((note) => {
+    const li = document.createElement("li");
+    li.className = `pending-item note-${note.color || "yellow"}`;
+    const text = document.createElement("p");
+    text.textContent = note.text;
+    const meta = document.createElement("small");
+    const column = columnsOf(state.meta).find((c) => c.id === note.column);
+    meta.textContent = [note.hidden ? "Hidden" : "Waiting", column?.name, state.meta.showNames && note.name]
+      .filter(Boolean).join(" · ");
+    const actions = document.createElement("div");
+    actions.className = "pending-actions";
+    actions.append(
+      button(note.hidden ? "↩ Restore" : "✓ Approve", "btn small", () =>
+        db.approvePost(state.code, note).catch(onActionError)),
+      button("🗑", "btn small danger", () => {
+        if (confirm("Delete this note? This cannot be undone.")) {
+          db.removePost(state.code, db.PENDING, note.id).catch(onActionError);
+        }
+      }, "Delete"),
+    );
+    li.append(text, meta, actions);
+    return li;
+  }));
+}
+
+function button(label, className, onClick, title) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = className;
+  btn.textContent = label;
+  if (title) { btn.title = title; btn.setAttribute("aria-label", title); }
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+function openNote(note) {
+  const box = $("#dialog-note");
+  box.className = `note big note-${note.color || "yellow"}`;
+  const text = document.createElement("p");
+  text.className = "note-text";
+  text.textContent = note.text;
+  const foot = document.createElement("footer");
+  foot.className = "note-foot";
+  const who = document.createElement("span");
+  who.className = "note-name";
+  if (state.meta.showNames && note.name) who.textContent = note.name;
+  const likes = document.createElement("span");
+  likes.className = "like";
+  likes.textContent = `♥ ${note.likeCount || 0}`;
+  foot.append(who, likes);
+  box.replaceChildren(text, foot);
+  $("#note-dialog").showModal();
+}
+
+/* ---------- Controls ---------- */
+
+function wireControls() {
+  const sort = $("#sort-input");
+  sort.value = state.sort;
+  sort.addEventListener("change", () => {
+    state.sort = sort.value;
+    storageSet(SORT_KEY, state.sort);
+    render();
+  });
+
+  $("#note-dialog").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) e.currentTarget.close(); // click on the backdrop
+  });
+
+  if (!state.isOwner) return;
+
+  const toggleMeta = (field, fallback, messages) => () => {
+    const next = !(state.meta[field] ?? fallback);
+    db.updateMeta(state.code, { [field]: next })
+      .then(() => toast(messages[next ? 1 : 0]))
+      .catch(onActionError);
+  };
+
+  $("#pause-btn").addEventListener("click",
+    toggleMeta("open", true, ["Posting paused", "Posting open"]));
+  $("#reveal-btn").addEventListener("click",
+    toggleMeta("revealed", true, ["Notes hidden. Students see only their own.", "Notes revealed to everyone"]));
+  $("#approval-btn").addEventListener("click",
+    toggleMeta("approval", false, ["Approval mode off: new notes appear straight away", "Approval mode on: new notes wait for you"]));
+  $("#names-btn").addEventListener("click",
+    toggleMeta("showNames", false, ["Names hidden", "Names shown"]));
+
+  $("#approve-all-btn").addEventListener("click", () => {
+    const waiting = toSortedList(state.pending).filter((n) => !n.hidden);
+    db.approveAll(state.code, waiting)
+      .then(() => toast(`Approved ${waiting.length} notes`))
+      .catch(onActionError);
+  });
+
+  $("#qr-btn").addEventListener("click", () => {
+    const panel = $("#qr-panel");
+    const hide = !panel.hidden;
+    show(panel, !hide);
+    $("#board").classList.toggle("qr-hidden", hide);
+    $("#qr-btn").textContent = hide ? "Show QR" : "Hide QR";
+  });
+
+  $("#clear-btn").addEventListener("click", () => {
+    if (!confirm("Delete all notes and likes? This cannot be undone.")) return;
+    db.clearBoard(state.code).then(() => toast("Board cleared")).catch(onActionError);
+  });
+
+  $("#fullscreen-btn").addEventListener("click", () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen?.();
+  });
+
+  // Print the real note text even while notes are hidden from students
+  window.addEventListener("beforeprint", () => { state.printing = true; render(); });
+  window.addEventListener("afterprint", () => { state.printing = false; render(); });
+  $("#print-btn").addEventListener("click", () => window.print());
+
+  $("#csv-btn").addEventListener("click", exportCsv);
+}
+
+function exportCsv() {
+  const columns = new Map(columnsOf(state.meta).map((c) => [c.id, c.name]));
+  const rows = [["column", "text", "name", "likes", "status", "highlighted", "participant", "created_at", "edited_at"]];
+  const all = [
+    ...toSortedList(state.posts, state.likes, "oldest").map((n) => ({ ...n, status: "approved" })),
+    ...toSortedList(state.pending, {}, "oldest").map((n) => ({ ...n, status: n.hidden ? "hidden" : "waiting" })),
+  ];
+  for (const n of all) {
+    rows.push([
+      columns.get(n.column) || "",
+      n.text,
+      n.name || "",
+      n.likeCount || 0,
+      n.status,
+      n.highlighted ? "yes" : "",
+      n.uid.slice(0, 8),
+      new Date(n.ts).toISOString(),
+      n.editedAt ? new Date(n.editedAt).toISOString() : "",
+    ]);
+  }
+  const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `pinboard-${state.code}.csv`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function onActionError(err) {
+  console.error(err);
+  toast(friendlyError(err), 5000);
+}
+
+function friendlyError(err) {
+  const msg = String(err?.code || err?.message || err);
+  if (msg.includes("operation-not-allowed")) return "Enable Anonymous sign-in in Firebase Authentication.";
+  if (msg.includes("unauthorized-domain")) return "Add this domain to Firebase Authentication → Authorized domains.";
+  if (msg.includes("are-blocked")) return "This address is blocked by the API key's website restrictions in Google Cloud Console. See the README's troubleshooting table.";
+  if (msg.toLowerCase().includes("permission")) return "Permission denied. Check that the combined database rules are published.";
+  return "Something went wrong. Check the browser console for details.";
+}

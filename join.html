@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Join · Live Pin Board</title>
+  <meta name="description" content="Pin your notes to the live class board.">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <script>try { var t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+  <script type="module" src="js/join.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="join.html"><img src="assets/favicon.svg" alt="">Live Pin Board</a>
+    <button id="theme-toggle" class="icon-btn" type="button"></button>
+  </header>
+
+  <div id="config-banner" class="banner" hidden>
+    Firebase isn't configured yet. Add your project's config to <code>js/firebase-config.js</code>.
+  </div>
+
+  <main class="join">
+    <section id="enter-code" class="card" hidden>
+      <h1>Join a pin board</h1>
+      <form id="code-form">
+        <label>Board code
+          <input id="code-input" maxlength="6" required autocomplete="off" autocapitalize="characters"
+                 inputmode="text" placeholder="ABC123">
+        </label>
+        <button class="btn primary big" type="submit">Join</button>
+      </form>
+    </section>
+
+    <section id="session" hidden>
+      <div class="card">
+        <p class="eyebrow">Board <span id="board-code"></span></p>
+        <h1 id="title"></h1>
+        <form id="note-form" novalidate>
+          <p id="edit-banner" class="edit-banner" hidden>
+            Editing your note <button id="cancel-edit" class="link-btn" type="button">Cancel</button>
+          </p>
+          <textarea id="note-text" maxlength="280" rows="4" autocomplete="off"
+                    placeholder="Write your note…" aria-label="Your note"></textarea>
+          <div class="input-meta">
+            <span id="char-count">0/280</span>
+            <span id="remaining"></span>
+          </div>
+
+          <div id="column-field" hidden>
+            <p class="field-label">Column</p>
+            <div id="column-choices" class="segmented" role="radiogroup" aria-label="Column"></div>
+          </div>
+
+          <p class="field-label">Colour</p>
+          <div id="color-choices" class="swatches" role="radiogroup" aria-label="Note colour"></div>
+
+          <label id="name-field" hidden>Your name <small class="muted">(optional)</small>
+            <input id="name-input" maxlength="30" autocomplete="name" placeholder="Anonymous">
+          </label>
+
+          <button id="submit-btn" class="btn primary big" type="submit">📌 Pin it</button>
+        </form>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </div>
+
+      <div id="board-section" class="join-board">
+        <p id="board-note" class="board-note" hidden></p>
+        <h2 id="board-heading" class="section-title">Board</h2>
+        <div id="notes" class="notes"></div>
+      </div>
+    </section>
+
+    <section id="message" class="card center" hidden>
+      <div id="message-emoji" class="message-emoji"></div>
+      <h1 id="message-title"></h1>
+      <p id="message-body" class="muted"></p>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

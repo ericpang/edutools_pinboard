@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Pin Board</title>
+  <meta name="description" content="A real-time pin board your class fills with notes from their phones.">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <script>try { var t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+  <script type="module" src="js/present.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./"><img src="assets/favicon.svg" alt="">Live Pin Board</a>
+    <div class="topbar-actions">
+      <span id="join-pill" class="join-pill" hidden>Join with code <strong id="pill-code"></strong></span>
+      <button id="theme-toggle" class="icon-btn" type="button"></button>
+    </div>
+  </header>
+
+  <div id="config-banner" class="banner" hidden>
+    Firebase isn't configured yet. Add your project's config to <code>js/firebase-config.js</code>.
+    See the README's <em>Setup</em> section for instructions.
+  </div>
+
+  <section id="setup" class="setup card" hidden>
+    <h1>Start a pin board</h1>
+    <form id="setup-form">
+      <label>Question or prompt
+        <input id="title-input" maxlength="200" required autocomplete="off"
+               placeholder="What is one thing you learned today?">
+      </label>
+
+      <fieldset class="choice">
+        <legend>Layout</legend>
+        <label class="radio-card">
+          <input type="radio" name="layout" value="wall" checked>
+          <span><strong>Wall</strong><small>Notes flow into a grid, newest first</small></span>
+        </label>
+        <label class="radio-card">
+          <input type="radio" name="layout" value="columns">
+          <span><strong>Columns</strong><small>Students choose a named column</small></span>
+        </label>
+      </fieldset>
+
+      <div id="columns-setup" class="columns-setup" hidden>
+        <p class="eyebrow">Column names</p>
+        <ol id="column-inputs" class="column-inputs"></ol>
+        <button id="add-column" class="btn small" type="button">＋ Add column</button>
+      </div>
+
+      <label>Notes per person
+        <select id="max-input">
+          <option value="1">1</option>
+          <option value="3" selected>3</option>
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="0">Unlimited</option>
+        </select>
+      </label>
+
+      <fieldset class="toggles">
+        <legend>Options</legend>
+        <label class="check"><input id="names-input" type="checkbox">
+          <span><strong>Show names</strong><small>Students may add their name to notes</small></span></label>
+        <label class="check"><input id="approval-input" type="checkbox">
+          <span><strong>Approval mode</strong><small>New notes stay hidden until you approve them</small></span></label>
+        <label class="check"><input id="reveal-input" type="checkbox">
+          <span><strong>Hide notes until I reveal them</strong><small>Students see only their own notes at first</small></span></label>
+      </fieldset>
+
+      <button id="start-btn" class="btn primary" type="submit">Start board</button>
+    </form>
+    <p id="resume" class="muted" hidden>Or resume your last board: <a id="resume-link" href="#"></a></p>
+    <p class="muted">Joining as a participant? <a href="join.html">Enter a code</a></p>
+  </section>
+
+  <main id="board" class="board" hidden>
+    <section class="stage">
+      <h1 id="title" class="title"></h1>
+      <div class="toolbar">
+        <div class="badges">
+          <span id="paused-badge" class="badge" hidden>⏸ Posting paused</span>
+          <span id="concealed-badge" class="badge info" hidden>🙈 Notes hidden from students</span>
+          <span id="approval-badge" class="badge info" hidden>✋ Approval mode</span>
+        </div>
+        <label class="sort">Sort
+          <select id="sort-input">
+            <option value="newest">Newest</option>
+            <option value="oldest">Oldest</option>
+            <option value="likes">Most liked</option>
+          </select>
+        </label>
+      </div>
+      <div id="notes-wrap" class="notes-wrap">
+        <div id="notes" class="notes"></div>
+        <div id="empty" class="empty"><span>📌</span>Waiting for notes…<small>Scan the QR code to add yours</small></div>
+      </div>
+    </section>
+
+    <aside class="sidebar">
+      <div id="qr-panel" class="card qr-panel">
+        <p class="eyebrow">Scan to join</p>
+        <div id="qr" class="qr"></div>
+        <p id="join-url" class="join-url"></p>
+        <p class="code">Code <strong id="code"></strong></p>
+      </div>
+
+      <div class="card stats">
+        <div><span id="stat-notes">0</span><small>notes</small></div>
+        <div><span id="stat-people">0</span><small>contributors</small></div>
+        <div><span id="stat-likes">0</span><small>likes</small></div>
+      </div>
+
+      <details id="pending-panel" class="card pending-panel" hidden>
+        <summary><span>Waiting for approval</span> <strong id="pending-count" class="count-pill">0</strong></summary>
+        <button id="approve-all-btn" class="btn small wide" type="button">✓ Approve all</button>
+        <ul id="pending-list" class="pending-list"></ul>
+      </details>
+
+      <div id="controls" class="card controls">
+        <button id="pause-btn" class="btn" type="button">⏸ Pause</button>
+        <button id="reveal-btn" class="btn" type="button">🙈 Hide notes</button>
+        <button id="approval-btn" class="btn" type="button">✋ Approval</button>
+        <button id="names-btn" class="btn" type="button">👤 Names</button>
+        <button id="qr-btn" class="btn" type="button">Hide QR</button>
+        <button id="fullscreen-btn" class="btn" type="button">⛶ Fullscreen</button>
+        <button id="csv-btn" class="btn" type="button">⬇ CSV</button>
+        <button id="print-btn" class="btn" type="button">🖨 Print</button>
+        <button id="clear-btn" class="btn danger" type="button">🗑 Clear</button>
+        <a class="btn" href="./">＋ New board</a>
+      </div>
+
+      <p id="hint" class="hint muted">Click a note to enlarge it. Hover for ★ highlight, 🙈 hide and 🗑 delete.</p>
+    </aside>
+  </main>
+
+  <dialog id="note-dialog" class="note-dialog">
+    <article id="dialog-note" class="note big"></article>
+    <form method="dialog"><button class="btn" type="submit">Close</button></form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
