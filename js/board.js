@@ -53,9 +53,11 @@ function card(cache, note, opts) {
   node.classList.toggle("concealed", !!opts.concealed);
   node.classList.toggle("clickable", !!opts.onOpen && !opts.concealed);
   node.onclick = opts.onOpen && !opts.concealed ? () => opts.onOpen(note) : null;
+  applySize(node, opts.sizes?.[note.id], !opts.columns?.length);
+  const handle = opts.onResize ? resizeHandle(node, note, opts) : null;
 
   if (opts.concealed) {
-    node.replaceChildren(el("span", "note-back", "?"));
+    node.replaceChildren(el("span", "note-back", "?"), ...(handle ? [handle] : []));
     node.setAttribute("aria-label", "Hidden note");
     return node;
   }
@@ -88,8 +90,94 @@ function card(cache, note, opts) {
   }
   foot.append(actions);
   children.push(foot);
+  if (handle) children.push(handle);
   node.replaceChildren(...children);
   return node;
+}
+
+/* ---------- Resizing ---------- */
+
+const MIN_NOTE_HEIGHT = 60;
+
+/** size: { span, h } — span = grid columns covered (Wall only), h = minimum height in px. */
+function applySize(node, size, wall) {
+  const span = wall && size?.span > 1 ? size.span : 0;
+  if (span) node.dataset.span = span;
+  else delete node.dataset.span;
+  node.style.gridColumn = span ? `span ${span}` : ""; // clamped to the real column count by wallTracks
+  node.style.minHeight = size?.h ? `${size.h}px` : "";
+}
+
+/** Number of columns the Wall grid can fit, ignoring any extra columns that wide notes would add. */
+function wallTracks(grid) {
+  const wide = [...grid.querySelectorAll(":scope > .note[data-span]")];
+  wide.forEach((n) => { n.style.gridColumn = ""; });
+  const count = getComputedStyle(grid).gridTemplateColumns.split(" ").length;
+  wide.forEach((n) => { n.style.gridColumn = `span ${Math.min(Number(n.dataset.span), count)}`; });
+  return count;
+}
+
+/** Keep wide notes within the available columns when the board changes size. */
+const resizeObservers = new WeakMap();
+function watchWallWidth(container) {
+  if (resizeObservers.has(container) || typeof ResizeObserver === "undefined") return;
+  let lastWidth = 0;
+  const observer = new ResizeObserver(([entry]) => {
+    const width = Math.round(entry.contentRect.width);
+    if (width === lastWidth) return;
+    lastWidth = width;
+    if (container.classList.contains("wall")) wallTracks(container);
+  });
+  observer.observe(container);
+  resizeObservers.set(container, observer);
+}
+
+function resizeHandle(node, note, opts) {
+  const handle = el("span", "note-resize");
+  handle.title = "Drag to resize. Double-click to reset.";
+  handle.setAttribute("aria-hidden", "true");
+  handle.addEventListener("click", (e) => e.stopPropagation()); // don't open the note
+  handle.addEventListener("dblclick", (e) => {
+    e.stopPropagation();
+    applySize(node, null, false);
+    opts.onResize(note, null, true);
+  });
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handle.setPointerCapture(e.pointerId);
+
+    const grid = node.parentElement;
+    const wall = grid.classList.contains("wall");
+    const style = getComputedStyle(grid);
+    const tracks = style.gridTemplateColumns.split(" ").map(parseFloat);
+    const gap = parseFloat(style.columnGap) || 0;
+    const start = node.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let size = opts.sizes?.[note.id] || null;
+    node.classList.add("resizing");
+
+    const move = (ev) => {
+      const width = start.width + ev.clientX - startX;
+      const span = wall ? Math.min(tracks.length, Math.max(1, Math.round((width + gap) / (tracks[0] + gap)))) : 1;
+      const h = Math.max(MIN_NOTE_HEIGHT, Math.round(start.height + ev.clientY - startY));
+      size = { span, h };
+      applySize(node, size, wall);
+      opts.onResize(note, size, false);
+    };
+    const end = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      node.classList.remove("resizing");
+      opts.onResize(note, size, true);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  });
+  return handle;
 }
 
 /**
@@ -106,6 +194,8 @@ function card(cache, note, opts) {
  *   likedByMe   note → boolean
  *   onOpen      note → void; click a card to enlarge it
  *   emptyText   message for an empty wall or column
+ *   sizes       { [noteId]: { span, h } } per-note sizes
+ *   onResize    (note, size|null, done) → void; adds a resize handle to each card
  */
 export function renderBoard(container, notes, opts = {}) {
   const cache = cacheFor(container);
@@ -121,6 +211,10 @@ export function renderBoard(container, notes, opts = {}) {
     const cards = notes.map((n) => card(cache, n, opts));
     if (!cards.length && opts.emptyText) container.replaceChildren(el("p", "board-empty", opts.emptyText));
     else container.replaceChildren(...cards);
+    if (opts.onResize) {
+      wallTracks(container);
+      watchWallWidth(container);
+    }
     return;
   }
 

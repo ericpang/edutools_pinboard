@@ -95,6 +95,8 @@ and shares the posts. Every browser connects directly to Firebase:
 - Large QR code and join code, with a toggle to hide the QR once everyone has joined
 - Live counters for participants and notes
 - Sort notes by **newest**, **oldest** or **most liked**
+- Resize any note by dragging its bottom-right corner (double-click the corner to reset). In Wall layout, wider notes span more grid columns.
+- Resize the board: drag the divider next to the side panel (or double-click it to reset), and use the **Note size** slider to make notes bigger or smaller. **Hide panel** gives the whole width to the board. These choices are remembered in your browser.
 - Click a note to **enlarge** it for discussion
 - Controls:
   - **Pause or resume** posting (the board stays visible)

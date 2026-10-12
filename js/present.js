@@ -8,6 +8,12 @@ import { $, toast, show, storageGet, storageSet, boardCodeFromUrl } from "./ui.j
 
 const LAST_BOARD_KEY = "lastBoard";
 const SORT_KEY = "pinboardSort";
+const NOTE_SIZE_KEY = "pinboardNoteSize";
+const PANEL_KEY = "pinboardPanelHidden";
+const SIDEBAR_WIDTH_KEY = "pinboardSidebarWidth";
+const NOTE_SIZES_KEY = "pinboardNoteSizes:"; // + board code
+const SIDEBAR_MIN = 200;
+const SIDEBAR_MAX = 640;
 const DEFAULT_COLUMNS = ["Went well", "To improve", "Ideas"];
 const MIN_COLUMNS = 2;
 const MAX_COLUMNS = 5;
@@ -21,6 +27,7 @@ const state = {
   pending: {},
   likes: {},
   sort: storageGet(SORT_KEY) || "newest",
+  noteSizes: {},       // per-note sizes set by dragging, remembered per board in this browser
   printing: false,     // show note text while printing even if notes are hidden
   unwatchPosts: null,  // non-owner viewers can read posts only once revealed
 };
@@ -150,6 +157,7 @@ function startBoard(code, isOwner) {
   state.code = code;
   state.isOwner = isOwner;
   if (isOwner) storageSet(LAST_BOARD_KEY, code);
+  try { state.noteSizes = JSON.parse(storageGet(NOTE_SIZES_KEY + code)) || {}; } catch { state.noteSizes = {}; }
 
   show($("#board"));
   show($("#join-pill"));
@@ -224,6 +232,8 @@ function render() {
     concealed: !revealed && !state.printing,
     actions: state.isOwner ? noteActions : null,
     onOpen: openNote,
+    sizes: state.noteSizes,
+    onResize: resizeNote,
     emptyText: columns.length ? "No notes yet" : "",
   });
   show($("#empty"), notes.length === 0 && columns.length === 0);
@@ -235,6 +245,17 @@ function render() {
   $("#stat-likes").textContent = liveLikes;
 
   renderPending(pending);
+}
+
+function resizeNote(note, size, done) {
+  if (size) state.noteSizes[note.id] = size;
+  else delete state.noteSizes[note.id];
+  if (!done) return;
+  // Forget sizes of notes that no longer exist
+  for (const id of Object.keys(state.noteSizes)) {
+    if (!state.posts[id] && !state.pending[id]) delete state.noteSizes[id];
+  }
+  storageSet(NOTE_SIZES_KEY + state.code, JSON.stringify(state.noteSizes));
 }
 
 function noteActions(note) {
@@ -328,6 +349,10 @@ function wireControls() {
     if (e.target === e.currentTarget) e.currentTarget.close(); // click on the backdrop
   });
 
+  wireNoteSize();
+  wirePanelToggle();
+  wireSplitter();
+
   if (!state.isOwner) return;
 
   const toggleMeta = (field, fallback, messages) => () => {
@@ -377,6 +402,90 @@ function wireControls() {
   $("#print-btn").addEventListener("click", () => window.print());
 
   $("#csv-btn").addEventListener("click", exportCsv);
+}
+
+/* ---------- Layout: note size, side panel ---------- */
+
+function wireNoteSize() {
+  const input = $("#size-input");
+  const apply = () => $("#notes-wrap").style.setProperty("--note-scale", input.value);
+  input.value = storageGet(NOTE_SIZE_KEY) || "1";
+  apply();
+  input.addEventListener("input", () => {
+    apply();
+    storageSet(NOTE_SIZE_KEY, input.value);
+  });
+}
+
+function wirePanelToggle() {
+  const btn = $("#panel-btn");
+  const apply = (hidden) => {
+    $("#board").classList.toggle("panel-hidden", hidden);
+    btn.textContent = hidden ? "⇤ Show panel" : "Hide panel ⇥";
+    btn.setAttribute("aria-expanded", String(!hidden));
+  };
+  apply(storageGet(PANEL_KEY) === "1");
+  btn.addEventListener("click", () => {
+    const hidden = !$("#board").classList.contains("panel-hidden");
+    apply(hidden);
+    storageSet(PANEL_KEY, hidden ? "1" : "0");
+  });
+}
+
+/** Drag (or use arrow keys on) the bar between the board and the side panel to resize them. */
+function wireSplitter() {
+  const board = $("#board");
+  const splitter = $("#splitter");
+  const sidebar = $("#sidebar");
+
+  const maxWidth = () => Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, board.clientWidth * 0.6));
+  const setWidth = (px, save = true) => {
+    if (px == null) {
+      board.style.removeProperty("--sidebar-width");
+      if (save) storageSet(SIDEBAR_WIDTH_KEY, "");
+    } else {
+      const width = Math.round(Math.min(maxWidth(), Math.max(SIDEBAR_MIN, px)));
+      board.style.setProperty("--sidebar-width", `${width}px`);
+      if (save) storageSet(SIDEBAR_WIDTH_KEY, String(width));
+    }
+    splitter.setAttribute("aria-valuenow", String(Math.round(sidebar.getBoundingClientRect().width)));
+  };
+
+  const saved = Number(storageGet(SIDEBAR_WIDTH_KEY));
+  if (saved) setWidth(saved, false);
+  splitter.setAttribute("aria-valuemin", String(SIDEBAR_MIN));
+  splitter.setAttribute("aria-valuemax", String(SIDEBAR_MAX));
+
+  splitter.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    splitter.setPointerCapture(e.pointerId);
+    splitter.classList.add("dragging");
+    board.classList.add("resizing");
+    const startX = e.clientX;
+    const startWidth = sidebar.getBoundingClientRect().width;
+    const move = (ev) => setWidth(startWidth + (startX - ev.clientX), false);
+    const end = () => {
+      splitter.removeEventListener("pointermove", move);
+      splitter.classList.remove("dragging");
+      board.classList.remove("resizing");
+      setWidth(sidebar.getBoundingClientRect().width);
+    };
+    splitter.addEventListener("pointermove", move);
+    splitter.addEventListener("pointerup", end, { once: true });
+    splitter.addEventListener("pointercancel", end, { once: true });
+  });
+
+  splitter.addEventListener("dblclick", () => setWidth(null));
+  splitter.addEventListener("keydown", (e) => {
+    const step = e.shiftKey ? 60 : 20;
+    const width = sidebar.getBoundingClientRect().width;
+    if (e.key === "ArrowLeft") setWidth(width + step);
+    else if (e.key === "ArrowRight") setWidth(width - step);
+    else if (e.key === "Home") setWidth(SIDEBAR_MAX);
+    else if (e.key === "End") setWidth(SIDEBAR_MIN);
+    else return;
+    e.preventDefault();
+  });
 }
 
 function exportCsv() {

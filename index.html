@@ -89,13 +89,19 @@
           <span id="concealed-badge" class="badge info" hidden>🙈 Notes hidden from students</span>
           <span id="approval-badge" class="badge info" hidden>✋ Approval mode</span>
         </div>
-        <label class="sort">Sort
-          <select id="sort-input">
-            <option value="newest">Newest</option>
-            <option value="oldest">Oldest</option>
-            <option value="likes">Most liked</option>
-          </select>
-        </label>
+        <div class="view-controls">
+          <label class="size-control">Note size
+            <input id="size-input" type="range" min="0.7" max="2" step="0.1" value="1">
+          </label>
+          <label class="sort">Sort
+            <select id="sort-input">
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="likes">Most liked</option>
+            </select>
+          </label>
+          <button id="panel-btn" class="btn small" type="button" aria-controls="sidebar"></button>
+        </div>
       </div>
       <div id="notes-wrap" class="notes-wrap">
         <div id="notes" class="notes"></div>
@@ -103,7 +109,10 @@
       </div>
     </section>
 
-    <aside class="sidebar">
+    <div id="splitter" class="splitter" role="separator" aria-orientation="vertical"
+         aria-label="Resize side panel" tabindex="0" title="Drag to resize. Double-click to reset."></div>
+
+    <aside id="sidebar" class="sidebar">
       <div id="qr-panel" class="card qr-panel">
         <p class="eyebrow">Scan to join</p>
         <div id="qr" class="qr"></div>
