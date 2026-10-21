@@ -1,6 +1,8 @@
 // Shared rendering of notes as cards, in Wall or Columns layout.
 // Card elements are reused between renders, so only new notes play the pop-in animation.
 
+import { groupLabel, groupHue } from "./groups.js";
+
 /** Columns from meta, sorted by their `order`. */
 export function columnsOf(meta) {
   if (meta?.layout !== "columns") return [];
@@ -33,9 +35,16 @@ function actionButton(label, title, onClick) {
   return btn;
 }
 
+/** A small coloured "Group N" tag. */
+export function groupChip(group, className = "group-chip") {
+  const chip = el("span", className, groupLabel(group));
+  chip.style.setProperty("--group-hue", groupHue(group));
+  return chip;
+}
+
 /**
  * Build or update one card.
- * @param {object} note  { id, text, color, name, likeCount, highlighted, uid, editedAt, status }
+ * @param {object} note  { id, text, color, name, group, likeCount, highlighted, uid, editedAt, status }
  * @param {object} opts  see renderBoard
  */
 function card(cache, note, opts) {
@@ -70,6 +79,7 @@ function card(cache, note, opts) {
   const foot = el("footer", "note-foot");
   const who = el("span", "note-name");
   if (mine) who.append(el("span", "you-badge", "You"));
+  if (opts.showGroups && note.group) who.append(groupChip(note.group));
   if (opts.showNames && note.name) who.append(document.createTextNode(note.name));
   if (note.editedAt) who.append(el("span", "edited", "edited"));
   foot.append(who);
@@ -187,6 +197,7 @@ function resizeHandle(node, note, opts) {
  * @param {object} opts
  *   columns     [{id, name}] for Columns layout, [] for Wall
  *   showNames   show author names
+ *   showGroups  tag each note with its author's group
  *   myUid       marks the viewer's own notes
  *   concealed   show card backs only (reveal mode on the projector)
  *   actions     note → [[label, title, onClick], ...] extra buttons per note

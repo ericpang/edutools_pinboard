@@ -5,9 +5,10 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getDatabase, ref, get, set, update, push, remove, onValue,
-  query, orderByChild, equalTo, serverTimestamp,
+  query, orderByChild, equalTo, serverTimestamp, runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 import { firebaseConfig } from "./firebase-config.js";
+import { groupForSlot } from "./groups.js";
 
 export const isConfigured = !Object.values(firebaseConfig).some((v) => String(v).includes("YOUR_"));
 
@@ -81,13 +82,43 @@ export function watchLikes(code, callback) {
   return onValue(boardRef(code, "likes"), (snap) => callback(snap.val() || {}));
 }
 
+/** Presenter only: { uid: { group, slot, ts } } for everyone placed in a group. */
+export function watchMembers(code, callback, onError) {
+  return onValue(boardRef(code, "members"), (snap) => callback(snap.val() || {}), onError);
+}
+
 /* ---------- Participant writes ---------- */
 
+/**
+ * Place this participant in a group, or return the one they already have.
+ * The slot counter is claimed in a transaction, so two people joining at once never share a slot.
+ */
+export async function joinGroup(code, uid, meta) {
+  const mine = boardRef(code, `members/${uid}`);
+  const existing = await get(mine);
+  if (existing.exists()) return existing.val().group;
+
+  const { committed, snapshot } = await runTransaction(boardRef(code, "joinCount"), (n) => (n || 0) + 1);
+  if (!committed) throw new Error("Could not join a group.");
+  const slot = snapshot.val() - 1;
+  const group = groupForSlot(slot, meta.groups, meta.groupSeed || 0);
+  try {
+    await set(mine, { group, slot, ts: serverTimestamp() });
+    return group;
+  } catch (err) {
+    // Another tab on this device got there first; use its group
+    const again = await get(mine);
+    if (again.exists()) return again.val().group;
+    throw err;
+  }
+}
+
 /** New notes go straight to `posts`, or to `pending` when approval mode is on. */
-export function addPost(code, approval, { text, color, column, name, uid }) {
+export function addPost(code, approval, { text, color, column, name, group, uid }) {
   const post = { text, color, uid, ts: serverTimestamp() };
   if (column) post.column = column;
   if (name) post.name = name;
+  if (group) post.group = group;
   return push(boardRef(code, approval ? PENDING : POSTS), post);
 }
 

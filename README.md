@@ -14,6 +14,7 @@ questions for a guest speaker, or peer feedback.
 - **Text-only notes**: simple, fast and free, with no photo uploads
 - **Two layouts**: a free-flowing *Wall* or labelled *Columns*
 - **Likes, moderation and reveal mode** so the teacher stays in control
+- **Random groups**: everyone who joins is placed in a random group, with groups kept the same size
 - **Day and night themes** that follow the device setting, with a manual toggle
 - **QR code join**: no app install and no participant login
 
@@ -56,7 +57,7 @@ and shares the posts. Every browser connects directly to Firebase:
            ▼                                    ▼
       ┌─────────────────────────────────────────────────┐
       │      Firebase Realtime Database (free tier)     │
-      │      /boards/ABC123/{meta, posts, likes}        │
+      │  /boards/ABC123/{meta, posts, likes, members}   │
       └─────────────────────────────────────────────────┘
                  ▲
                  │  static files only
@@ -93,6 +94,7 @@ and shares the posts. Every browser connects directly to Firebase:
   - **Wall**: notes flow into a grid, newest first
   - **Columns**: 2–5 named columns, for example *Went well / To improve / Ideas*. Participants pick a column when posting
 - Large QR code and join code, with a toggle to hide the QR once everyone has joined
+- Optional **random groups** (2–12), chosen when the board is created. See [Random groups](#random-groups)
 - Live counters for participants and notes
 - Sort notes by **newest**, **oldest** or **most liked**
 - Resize any note by dragging its bottom-right corner (double-click the corner to reset). In Wall layout, wider notes span more grid columns.
@@ -114,6 +116,7 @@ and shares the posts. Every browser connects directly to Firebase:
 - Mobile-first layout with large tap targets
 - Shows the question and an **Add a note** form: text box (280-character limit with a counter), colour picker and, in Columns layout, a column picker
 - Optional name field, shown only when the presenter allows names. The name is remembered on that phone
+- When groups are on, shows **"Your group: Group N"** at the top as soon as the person joins
 - Lets each person add several notes, with a configurable limit (default 3)
 - Shows the **live board** below the form; the person's own notes are marked "You" and can be **edited or deleted** while the board is open
 - **Like** other notes with a tap (one like per person per note)
@@ -151,6 +154,7 @@ PinBoard/
 │   ├── present.js          # Presenter logic: board setup, QR, moderation, export
 │   ├── join.js             # Participant logic: add/edit/delete notes, likes, limits
 │   ├── board.js            # Shared rendering of notes (Wall and Columns), sorting
+│   ├── groups.js           # Random, balanced group assignment
 │   ├── posts.js            # Note validation, trimming, profanity filter, colours
 │   ├── theme.js            # Day/night toggle, persisted in localStorage (from Word Cloud)
 │   └── ui.js               # Small DOM helpers (toast, storage, URL params) (from Word Cloud)
@@ -200,6 +204,8 @@ exist in both apps without clashing.
         "revealed": true,             // false = participants see only their own notes
         "showNames": false,
         "maxPerUser": 3,              // 0 = unlimited
+        "groups": 4,                  // optional: number of random groups, 0 = off
+        "groupSeed": 1234567,         // optional: shuffles the order groups are dealt out
         "createdAt": 1760000000000
       },
       "posts": {
@@ -208,6 +214,7 @@ exist in both apps without clashing.
           "column": "c1",
           "color": "yellow",          // one of a fixed palette
           "name": "Aisha",            // optional, only if showNames
+          "group": 2,                 // optional, the author's group
           "uid": "<participant uid>",
           "ts": 1760000001234,        // server time when created
           "editedAt": 1760000005678,  // optional
@@ -225,6 +232,10 @@ exist in both apps without clashing.
       },
       "likes": {
         "-Ob1a...": { "<uid>": true, "<uid>": true }
+      },
+      "joinCount": 7,                 // how many people have been placed in a group
+      "members": {
+        "<uid>": { "group": 2, "slot": 6, "ts": 1760000000500 }
       }
     }
   }
@@ -249,6 +260,7 @@ The rules live in `database.rules.json`. They enforce:
 | A participant | Create a note while `open` is true, tagged with their own `uid` and server timestamp; text 1–280 characters; colour from the palette; column must exist. It goes into `posts`, or into `pending` when approval mode is on |
 | A participant | Edit or delete their own note while `open` is true. In approval mode, approved notes can be deleted but not edited, so an edit can't slip past moderation. They cannot change `uid`, `ts`, `highlighted` or `hidden` |
 | A participant | Add or remove only their own like (`likes/$postId/<their uid>`), and only on a note in `posts` |
+| A participant | On a board with groups: add exactly 1 to `joinCount`, then write their own `members/<their uid>` once (it can't be changed afterwards). A note's `group` must match their own group |
 | The presenter (owner) | Everything on their board: edit `meta`, read `pending`, approve, hide, highlight, delete notes, clear the board |
 
 Reveal mode uses Realtime Database's
@@ -318,12 +330,42 @@ Spark plan allows only one, and Pin Board doesn't need it.
 6. When you are done, use **Export CSV** or **Print**.
 
 **Participants**
-1. Scan the QR code, or go to the site and enter the 6-character code.
+1. Scan the QR code, or go to the site and enter the 6-character code. If the board has groups, your group appears at the top.
 2. Write a note, choose a colour (and a column), and tap **Pin it**.
 3. Read and like classmates' notes; edit or delete your own while the board is open.
 
 Boards persist, so the presenter can refresh or reopen `index.html?b=ABC123` in
 the same browser and keep control of the board.
+
+---
+
+## Random groups
+
+Pick a number of groups under **Random groups** when you create a board. Each
+person is placed in a group the moment they open the join page:
+
+- **Balanced**: each joiner takes the next number from a shared counter
+  (`joinCount`). Numbers are dealt out in rounds, and every round gives each
+  group exactly one person, so group sizes never differ by more than one.
+- **Random**: the order the groups are dealt in is shuffled again for every
+  round, using the board's `groupSeed`, so nobody can predict or choose a group
+  by joining at a particular moment.
+- **Safe when many people join at once**: the counter is claimed in a
+  Firebase transaction, so two phones can never get the same number.
+- **Sticky**: reopening the page on the same phone keeps the same group.
+
+The presenter's side panel lists each group with how many people have joined
+it and how many notes it has posted. Click a group to show only its notes, and
+click it again (or the *Showing Group N only* badge) to show everyone. Notes
+carry a coloured group tag, and the CSV export has a `group` column.
+
+Limits to know about:
+- The number of groups is set when the board is created and can't be changed later.
+- Someone who joins on a second device counts again, so that group grows by one.
+- Clearing the board deletes notes and likes but keeps everyone's groups.
+- A student who knows how could write their own group number using the browser's
+  developer tools. The rules make sure the group exists and can't be changed
+  once it has been set, but they can't recompute the shuffle.
 
 ---
 

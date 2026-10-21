@@ -64,6 +64,11 @@
         </select>
       </label>
 
+      <label>Random groups
+        <select id="groups-input"></select>
+        <small class="field-help">Each person is placed in a random group as they join, keeping groups the same size</small>
+      </label>
+
       <fieldset class="toggles">
         <legend>Options</legend>
         <label class="check"><input id="names-input" type="checkbox">
@@ -88,6 +93,7 @@
           <span id="paused-badge" class="badge" hidden>⏸ Posting paused</span>
           <span id="concealed-badge" class="badge info" hidden>🙈 Notes hidden from students</span>
           <span id="approval-badge" class="badge info" hidden>✋ Approval mode</span>
+          <button id="filter-badge" class="badge info" type="button" hidden title="Show every group"></button>
         </div>
         <div class="view-controls">
           <label class="size-control">Note size
@@ -124,6 +130,11 @@
         <div><span id="stat-notes">0</span><small>notes</small></div>
         <div><span id="stat-people">0</span><small>contributors</small></div>
         <div><span id="stat-likes">0</span><small>likes</small></div>
+      </div>
+
+      <div id="groups-panel" class="card groups-panel" hidden>
+        <p class="eyebrow">Groups <span id="groups-total" class="muted"></span></p>
+        <div id="group-list" class="group-list" role="group" aria-label="Show notes from one group"></div>
       </div>
 
       <details id="pending-panel" class="card pending-panel" hidden>

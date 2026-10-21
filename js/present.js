@@ -2,7 +2,8 @@
 
 import * as db from "./db.js";
 import { toSortedList } from "./posts.js";
-import { renderBoard, columnsOf } from "./board.js";
+import { renderBoard, columnsOf, groupChip } from "./board.js";
+import { MAX_GROUPS, groupCountOf, groupLabel, randomSeed } from "./groups.js";
 import { initThemeToggle } from "./theme.js";
 import { $, toast, show, storageGet, storageSet, boardCodeFromUrl } from "./ui.js";
 
@@ -26,6 +27,8 @@ const state = {
   posts: {},
   pending: {},
   likes: {},
+  members: {},         // { uid: { group, slot, ts } } for everyone placed in a group
+  groupFilter: null,   // show only this group's notes
   sort: storageGet(SORT_KEY) || "newest",
   noteSizes: {},       // per-note sizes set by dragging, remembered per board in this browser
   printing: false,     // show note text while printing even if notes are hidden
@@ -72,6 +75,10 @@ function showSetup() {
     show($("#resume"));
   }
 
+  const groupsInput = $("#groups-input");
+  groupsInput.append(new Option("Off", "0"));
+  for (let n = 2; n <= MAX_GROUPS; n++) groupsInput.append(new Option(`${n} groups`, String(n)));
+
   DEFAULT_COLUMNS.forEach((name) => addColumnInput(name));
   $("#add-column").addEventListener("click", () => addColumnInput("").querySelector("input").focus());
   for (const radio of document.querySelectorAll('input[name="layout"]')) {
@@ -92,6 +99,8 @@ function showSetup() {
       showNames: $("#names-input").checked,
       maxPerUser: Number($("#max-input").value),
     };
+    const groups = Number(groupsInput.value);
+    if (groups) Object.assign(settings, { groups, groupSeed: randomSeed() });
     if (layout === "columns") {
       const names = [...document.querySelectorAll("#column-inputs input")]
         .map((i) => i.value.trim().slice(0, 40))
@@ -182,6 +191,7 @@ function startBoard(code, isOwner) {
   if (isOwner) {
     db.watchPosts(code, (posts) => { state.posts = posts; render(); }, onActionError);
     db.watchPending(code, (pending) => { state.pending = pending; render(); }, onActionError);
+    db.watchMembers(code, (members) => { state.members = members; render(); }, onActionError);
   }
 }
 
@@ -225,18 +235,26 @@ function render() {
   $("#names-btn").textContent = meta.showNames ? "👤 Names: on" : "👤 Names: off";
 
   const columns = columnsOf(meta);
+  const groupCount = groupCountOf(meta);
+  if (state.groupFilter > groupCount) state.groupFilter = null;
   const notes = toSortedList(state.posts, state.likes, state.sort);
-  renderBoard($("#notes"), notes, {
+  const shown = state.groupFilter ? notes.filter((n) => n.group === state.groupFilter) : notes;
+  const filterBadge = $("#filter-badge");
+  show(filterBadge, !!state.groupFilter);
+  if (state.groupFilter) filterBadge.textContent = `Showing ${groupLabel(state.groupFilter)} only ✕`;
+
+  renderBoard($("#notes"), shown, {
     columns,
     showNames: meta.showNames === true,
+    showGroups: groupCount > 0,
     concealed: !revealed && !state.printing,
     actions: state.isOwner ? noteActions : null,
     onOpen: openNote,
     sizes: state.noteSizes,
     onResize: resizeNote,
-    emptyText: columns.length ? "No notes yet" : "",
+    emptyText: state.groupFilter ? `No notes from ${groupLabel(state.groupFilter)} yet` : columns.length ? "No notes yet" : "",
   });
-  show($("#empty"), notes.length === 0 && columns.length === 0);
+  show($("#empty"), shown.length === 0 && columns.length === 0 && !state.groupFilter);
 
   const pending = toSortedList(state.pending, {}, "oldest");
   const liveLikes = notes.reduce((sum, n) => sum + n.likeCount, 0);
@@ -245,6 +263,44 @@ function render() {
   $("#stat-likes").textContent = liveLikes;
 
   renderPending(pending);
+  renderGroups(groupCount, notes);
+}
+
+/** Live size of each group, plus buttons to show one group's notes at a time. */
+function renderGroups(groupCount, notes) {
+  show($("#groups-panel"), state.isOwner && groupCount > 0);
+  if (!state.isOwner || !groupCount) return;
+
+  const sizes = new Array(groupCount + 1).fill(0);
+  for (const m of Object.values(state.members)) if (m.group <= groupCount) sizes[m.group]++;
+  const noteCounts = new Array(groupCount + 1).fill(0);
+  for (const n of notes) if (n.group <= groupCount) noteCounts[n.group]++;
+  const joined = sizes.reduce((a, b) => a + b, 0);
+  $("#groups-total").textContent = `· ${joined} joined`;
+
+  $("#group-list").replaceChildren(...Array.from({ length: groupCount }, (_, i) => {
+    const group = i + 1;
+    const pressed = state.groupFilter === group;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "group-row";
+    btn.setAttribute("aria-pressed", String(pressed));
+    btn.title = pressed ? "Show every group" : `Show only ${groupLabel(group)}'s notes`;
+    const people = document.createElement("span");
+    people.className = "group-size";
+    people.textContent = `👤 ${sizes[group]}`;
+    const count = document.createElement("small");
+    count.className = "muted";
+    count.textContent = `${noteCounts[group]} ${noteCounts[group] === 1 ? "note" : "notes"}`;
+    btn.append(groupChip(group), people, count);
+    btn.addEventListener("click", () => setGroupFilter(pressed ? null : group));
+    return btn;
+  }));
+}
+
+function setGroupFilter(group) {
+  state.groupFilter = group;
+  render();
 }
 
 function resizeNote(note, size, done) {
@@ -287,7 +343,8 @@ function renderPending(pending) {
     text.textContent = note.text;
     const meta = document.createElement("small");
     const column = columnsOf(state.meta).find((c) => c.id === note.column);
-    meta.textContent = [note.hidden ? "Hidden" : "Waiting", column?.name, state.meta.showNames && note.name]
+    const group = groupCountOf(state.meta) && note.group ? groupLabel(note.group) : "";
+    meta.textContent = [note.hidden ? "Hidden" : "Waiting", column?.name, group, state.meta.showNames && note.name]
       .filter(Boolean).join(" · ");
     const actions = document.createElement("div");
     actions.className = "pending-actions";
@@ -325,7 +382,8 @@ function openNote(note) {
   foot.className = "note-foot";
   const who = document.createElement("span");
   who.className = "note-name";
-  if (state.meta.showNames && note.name) who.textContent = note.name;
+  if (groupCountOf(state.meta) && note.group) who.append(groupChip(note.group));
+  if (state.meta.showNames && note.name) who.append(document.createTextNode(note.name));
   const likes = document.createElement("span");
   likes.className = "like";
   likes.textContent = `♥ ${note.likeCount || 0}`;
@@ -348,6 +406,8 @@ function wireControls() {
   $("#note-dialog").addEventListener("click", (e) => {
     if (e.target === e.currentTarget) e.currentTarget.close(); // click on the backdrop
   });
+
+  $("#filter-badge").addEventListener("click", () => setGroupFilter(null));
 
   wireNoteSize();
   wirePanelToggle();
@@ -490,7 +550,7 @@ function wireSplitter() {
 
 function exportCsv() {
   const columns = new Map(columnsOf(state.meta).map((c) => [c.id, c.name]));
-  const rows = [["column", "text", "name", "likes", "status", "highlighted", "participant", "created_at", "edited_at"]];
+  const rows = [["column", "group", "text", "name", "likes", "status", "highlighted", "participant", "created_at", "edited_at"]];
   const all = [
     ...toSortedList(state.posts, state.likes, "oldest").map((n) => ({ ...n, status: "approved" })),
     ...toSortedList(state.pending, {}, "oldest").map((n) => ({ ...n, status: n.hidden ? "hidden" : "waiting" })),
@@ -498,6 +558,7 @@ function exportCsv() {
   for (const n of all) {
     rows.push([
       columns.get(n.column) || "",
+      n.group ? groupLabel(n.group) : "",
       n.text,
       n.name || "",
       n.likeCount || 0,

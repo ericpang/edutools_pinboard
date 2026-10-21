@@ -1,8 +1,10 @@
-// Participant page: enter a code (or arrive via QR), add/edit/delete notes, see the board, like.
+// Participant page: enter a code (or arrive via QR), get placed in a group, add/edit/delete notes,
+// see the board, like.
 
 import * as db from "./db.js";
 import { validate, cleanName, toSortedList, COLORS, MAX_LEN } from "./posts.js";
 import { renderBoard, columnsOf } from "./board.js";
+import { groupCountOf, groupLabel, groupHue } from "./groups.js";
 import { initThemeToggle } from "./theme.js";
 import { $, toast, show, storageGet, storageSet, boardCodeFromUrl } from "./ui.js";
 
@@ -17,6 +19,9 @@ const state = {
   myPosts: {},      // this participant's approved notes
   myPending: {},    // this participant's notes awaiting approval or hidden
   likes: {},
+  group: null,      // this participant's group number, once assigned
+  joining: null,    // promise while being placed in a group
+  groupFailed: false,
   color: storageGet(COLOR_KEY) || COLORS[0],
   column: null,
   editing: null,    // { id, where } while editing one of your notes
@@ -42,7 +47,10 @@ async function main() {
 
   db.watchMeta(code, (meta) => {
     state.meta = meta;
-    if (meta) syncPostsListener();
+    if (meta) {
+      syncPostsListener();
+      if (groupCountOf(meta) && !state.groupFailed) ensureGroup();
+    }
     render();
   });
   db.watchMine(code, db.POSTS, state.uid, (posts) => { state.myPosts = posts; render(); });
@@ -64,6 +72,23 @@ function syncPostsListener() {
     state.unwatchPosts = null;
     state.posts = {};
   }
+}
+
+/**
+ * Join a group as soon as the board is known. Rejoining from the same phone keeps the same group.
+ * After a failure it isn't retried on every board update, only when the person next pins a note.
+ */
+function ensureGroup() {
+  if (state.group || state.joining) return state.joining;
+  state.joining = db.joinGroup(state.code, state.uid, state.meta)
+    .then((group) => { state.group = group; state.groupFailed = false; })
+    .catch((err) => {
+      console.error(err);
+      state.groupFailed = true;
+      toast("Couldn't place you in a group. Reload the page to try again.", 5000);
+    })
+    .finally(() => { state.joining = null; render(); });
+  return state.joining;
 }
 
 function showCodeEntry() {
@@ -102,8 +127,20 @@ function render() {
   $("#title").textContent = meta.title;
   document.title = `${meta.title} · Live Pin Board`;
 
+  renderGroup(meta);
   renderForm(meta);
   renderNotes(meta);
+}
+
+function renderGroup(meta) {
+  const card = $("#group-card");
+  show(card, groupCountOf(meta) > 0);
+  if (!groupCountOf(meta)) return;
+  const name = $("#group-name");
+  name.textContent = state.group ? groupLabel(state.group)
+    : state.groupFailed ? "Couldn't find your group" : "Finding your group…";
+  card.classList.toggle("assigned", !!state.group);
+  if (state.group) card.style.setProperty("--group-hue", groupHue(state.group));
 }
 
 function renderForm(meta) {
@@ -169,6 +206,7 @@ function renderNotes(meta) {
   renderBoard($("#notes"), notes, {
     columns: columnsOf(meta),
     showNames: meta.showNames === true,
+    showGroups: groupCountOf(meta) > 0,
     myUid: state.uid,
     emptyText: revealed ? "No notes yet. Be the first!" : "You haven't pinned anything yet.",
     likedByMe: (n) => state.likes[n.id]?.[state.uid] === true,
@@ -240,7 +278,8 @@ function wireForm() {
         setStatus("Saved! ✏️", "ok", true);
       } else {
         const name = state.meta.showNames ? cleanName(nameInput.value) : "";
-        await db.addPost(state.code, state.meta.approval === true, { ...fields, name, uid: state.uid });
+        if (groupCountOf(state.meta)) await ensureGroup();
+        await db.addPost(state.code, state.meta.approval === true, { ...fields, name, group: state.group, uid: state.uid });
         input.value = "";
         setStatus(state.meta.approval
           ? "Sent! Your note will appear once your teacher approves it."
