@@ -71,6 +71,8 @@
 
       <fieldset class="toggles">
         <legend>Options</legend>
+        <label id="chat-option" class="check" hidden><input id="chat-input" type="checkbox" checked>
+          <span><strong>Group chat</strong><small>Each group gets a private chat, readable only by its members and you</small></span></label>
         <label class="check"><input id="names-input" type="checkbox">
           <span><strong>Show names</strong><small>Students may add their name to notes</small></span></label>
         <label class="check"><input id="approval-input" type="checkbox">
@@ -148,6 +150,7 @@
         <button id="reveal-btn" class="btn" type="button">🙈 Hide notes</button>
         <button id="approval-btn" class="btn" type="button">✋ Approval</button>
         <button id="names-btn" class="btn" type="button">👤 Names</button>
+        <button id="chat-btn" class="btn" type="button" hidden>💬 Chat</button>
         <button id="qr-btn" class="btn" type="button">Hide QR</button>
         <button id="fullscreen-btn" class="btn" type="button">⛶ Fullscreen</button>
         <button id="csv-btn" class="btn" type="button">⬇ CSV</button>
@@ -162,6 +165,17 @@
 
   <dialog id="note-dialog" class="note-dialog">
     <article id="dialog-note" class="note big"></article>
+    <form method="dialog"><button class="btn" type="submit">Close</button></form>
+  </dialog>
+
+  <dialog id="chat-dialog" class="note-dialog chat-dialog">
+    <div class="card">
+      <div class="chat-dialog-head">
+        <p id="chat-dialog-title" class="eyebrow"></p>
+        <button id="chat-clear-btn" class="btn small danger" type="button">🗑 Clear this chat</button>
+      </div>
+      <div id="chat-dialog-log" class="chat-log" role="log" aria-label="Group chat transcript"></div>
+    </div>
     <form method="dialog"><button class="btn" type="submit">Close</button></form>
   </dialog>
 

@@ -5,7 +5,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/fireba
 import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getDatabase, ref, get, set, update, push, remove, onValue,
-  query, orderByChild, equalTo, serverTimestamp, runTransaction,
+  query, orderByChild, equalTo, limitToLast, serverTimestamp, runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 import { firebaseConfig } from "./firebase-config.js";
 import { groupForSlot } from "./groups.js";
@@ -40,6 +40,8 @@ const boardRef = (code, path = "") => ref(db, `boards/${code}${path ? "/" + path
 /** Approved notes live in `posts`; notes awaiting approval or hidden by the presenter live in `pending`. */
 export const POSTS = "posts";
 export const PENDING = "pending";
+
+const CHAT_HISTORY = 200; // newest messages a participant loads
 
 export async function createBoard(uid, settings) {
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -87,16 +89,29 @@ export function watchMembers(code, callback, onError) {
   return onValue(boardRef(code, "members"), (snap) => callback(snap.val() || {}), onError);
 }
 
+/** Participant: the newest messages of their own group. The rules allow only this query. */
+export function watchChat(code, group, callback, onError) {
+  const q = query(boardRef(code, "chat"), orderByChild("group"), equalTo(group), limitToLast(CHAT_HISTORY));
+  return onValue(q, (snap) => callback(snap.val() || {}), onError);
+}
+
+/** Presenter only: every group's messages. */
+export function watchAllChat(code, callback, onError) {
+  return onValue(boardRef(code, "chat"), (snap) => callback(snap.val() || {}), onError);
+}
+
 /* ---------- Participant writes ---------- */
 
+const placement = ({ group, slot }) => ({ group, slot });
+
 /**
- * Place this participant in a group, or return the one they already have.
+ * Place this participant in a group, or return the one they already have, as { group, slot }.
  * The slot counter is claimed in a transaction, so two people joining at once never share a slot.
  */
 export async function joinGroup(code, uid, meta) {
   const mine = boardRef(code, `members/${uid}`);
   const existing = await get(mine);
-  if (existing.exists()) return existing.val().group;
+  if (existing.exists()) return placement(existing.val());
 
   const { committed, snapshot } = await runTransaction(boardRef(code, "joinCount"), (n) => (n || 0) + 1);
   if (!committed) throw new Error("Could not join a group.");
@@ -104,13 +119,32 @@ export async function joinGroup(code, uid, meta) {
   const group = groupForSlot(slot, meta.groups, meta.groupSeed || 0);
   try {
     await set(mine, { group, slot, ts: serverTimestamp() });
-    return group;
+    return { group, slot };
   } catch (err) {
     // Another tab on this device got there first; use its group
     const again = await get(mine);
-    if (again.exists()) return again.val().group;
+    if (again.exists()) return placement(again.val());
     throw err;
   }
+}
+
+/** Say something in the sender's group chat. The rules check group and slot against their membership. */
+export function sendChat(code, { uid, group, slot, name, text }) {
+  const message = { group, uid, slot, text, ts: serverTimestamp() };
+  if (name) message.name = name;
+  return push(boardRef(code, "chat"), message);
+}
+
+/**
+ * Give or take back a thumbs up on a message in the person's own group chat. A thumbs up says who
+ * gave it ({ slot, name }), like a message does; the rules check the slot against their membership.
+ */
+export function setChatLike(code, messageId, uid, liked, { slot, name } = {}) {
+  const r = boardRef(code, `chat/${messageId}/likes/${uid}`);
+  if (!liked) return remove(r);
+  const who = { slot };
+  if (name) who.name = name;
+  return set(r, who);
 }
 
 /** New notes go straight to `posts`, or to `pending` when approval mode is on. */
@@ -174,6 +208,10 @@ export function removePost(code, where, id) {
   return update(boardRef(code), { [`${where}/${id}`]: null, [`likes/${id}`]: null });
 }
 
+/** Delete the given group chat messages. */
+export const removeChat = (code, ids) =>
+  update(boardRef(code, "chat"), Object.fromEntries(ids.map((id) => [id, null])));
+
 export function clearBoard(code) {
-  return update(boardRef(code), { [POSTS]: null, [PENDING]: null, likes: null });
+  return update(boardRef(code), { [POSTS]: null, [PENDING]: null, likes: null, chat: null });
 }

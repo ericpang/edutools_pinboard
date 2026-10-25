@@ -15,6 +15,7 @@ questions for a guest speaker, or peer feedback.
 - **Two layouts**: a free-flowing *Wall* or labelled *Columns*
 - **Likes, moderation and reveal mode** so the teacher stays in control
 - **Random groups**: everyone who joins is placed in a random group, with groups kept the same size
+- **Group chat**: with groups on, each group gets a private chat that only its members and the presenter can read
 - **Day and night themes** that follow the device setting, with a manual toggle
 - **QR code join**: no app install and no participant login
 
@@ -95,6 +96,7 @@ and shares the posts. Every browser connects directly to Firebase:
   - **Columns**: 2–5 named columns, for example *Went well / To improve / Ideas*. Participants pick a column when posting
 - Large QR code and join code, with a toggle to hide the QR once everyone has joined
 - Optional **random groups** (2–12), chosen when the board is created. See [Random groups](#random-groups)
+- With groups on, an optional **group chat**: switch it on or off, read any group's conversation and delete messages. See [Group chat](#group-chat)
 - Live counters for participants and notes
 - Sort notes by **newest**, **oldest** or **most liked**
 - Resize any note by dragging its bottom-right corner (double-click the corner to reset). In Wall layout, wider notes span more grid columns.
@@ -117,6 +119,7 @@ and shares the posts. Every browser connects directly to Firebase:
 - Shows the question and an **Add a note** form: text box (280-character limit with a counter), colour picker and, in Columns layout, a column picker
 - Optional name field, shown only when the presenter allows names. The name is remembered on that phone
 - When groups are on, shows **"Your group: Group N"** at the top as soon as the person joins
+- When group chat is on, a collapsible **Group chat** card under it lets the person talk with the others in their group, and give a 👍 to their messages. A badge counts messages they haven't read
 - Lets each person add several notes, with a configurable limit (default 3)
 - Shows the **live board** below the form; the person's own notes are marked "You" and can be **edited or deleted** while the board is open
 - **Like** other notes with a tap (one like per person per note)
@@ -155,6 +158,7 @@ PinBoard/
 │   ├── join.js             # Participant logic: add/edit/delete notes, likes, limits
 │   ├── board.js            # Shared rendering of notes (Wall and Columns), sorting
 │   ├── groups.js           # Random, balanced group assignment
+│   ├── chat.js             # Group chat: message rules, member labels, conversation view
 │   ├── posts.js            # Note validation, trimming, profanity filter, colours
 │   ├── theme.js            # Day/night toggle, persisted in localStorage (from Word Cloud)
 │   └── ui.js               # Small DOM helpers (toast, storage, URL params) (from Word Cloud)
@@ -206,6 +210,7 @@ exist in both apps without clashing.
         "maxPerUser": 3,              // 0 = unlimited
         "groups": 4,                  // optional: number of random groups, 0 = off
         "groupSeed": 1234567,         // optional: shuffles the order groups are dealt out
+        "chat": true,                 // optional: group chat on or off (needs groups)
         "createdAt": 1760000000000
       },
       "posts": {
@@ -236,6 +241,17 @@ exist in both apps without clashing.
       "joinCount": 7,                 // how many people have been placed in a group
       "members": {
         "<uid>": { "group": 2, "slot": 6, "ts": 1760000000500 }
+      },
+      "chat": {                       // group chat: one flat list, each message tagged with its group
+        "-Ob1c...": {
+          "group": 2,                 // the sender's group; only that group can read the message
+          "uid": "<participant uid>",
+          "slot": 6,                  // the sender's join slot; shows as "Member 2" in the chat
+          "name": "Aisha",            // optional chat name
+          "text": "I think it's the second one",
+          "ts": 1760000003456,
+          "likes": { "<uid>": { "slot": 6, "name": "Aisha" } }  // one thumbs up per groupmate, saying who gave it
+        }
       }
     }
   }
@@ -245,6 +261,7 @@ exist in both apps without clashing.
 - Each note is its own child, so two people posting at the same moment never overwrite each other.
 - Likes are stored per user (`likes/$postId/$uid`) rather than as a counter, so each person can like a note only once and the count can't be faked.
 - Notes the class should not see are kept in a separate `pending` node rather than flagged inside `posts`. Database rules cannot filter individual children, so a separate node is the only way to make sure students' phones never download them. Approving or restoring a note moves it to `posts`; hiding a note moves it back to `pending`.
+- Chat messages are one list tagged with each sender's group. A phone may read it only as a query on its **own** group (`orderByChild("group").equalTo(<its group>)`), the same technique reveal mode uses for notes, so it can never download another group's conversation. Thumbs ups live inside each message, so they follow the same rule.
 
 ---
 
@@ -261,7 +278,8 @@ The rules live in `database.rules.json`. They enforce:
 | A participant | Edit or delete their own note while `open` is true. In approval mode, approved notes can be deleted but not edited, so an edit can't slip past moderation. They cannot change `uid`, `ts`, `highlighted` or `hidden` |
 | A participant | Add or remove only their own like (`likes/$postId/<their uid>`), and only on a note in `posts` |
 | A participant | On a board with groups: add exactly 1 to `joinCount`, then write their own `members/<their uid>` once (it can't be changed afterwards). A note's `group` must match their own group |
-| The presenter (owner) | Everything on their board: edit `meta`, read `pending`, approve, hide, highlight, delete notes, clear the board |
+| A participant | On a board with groups and chat on: post to **their own group's** chat (the message's `group`, `uid` and `slot` must match their own membership; 1–300 characters, optional name up to 30), and read **only their own group's** messages. They can give a thumbs up to a groupmate's message (one per person, never to their own message or another group's; it records who gave it, and the member number must match their own membership). They can't edit or delete messages |
+| The presenter (owner) | Everything on their board: edit `meta`, read `pending`, approve, hide, highlight, delete notes, read every group's chat and delete messages, clear the board |
 
 Reveal mode uses Realtime Database's
 [query-based rules](https://firebase.google.com/docs/database/security/rules-conditions#query-based_rules):
@@ -277,6 +295,9 @@ in Word Cloud.
 > (and the other way round). `database.rules.json` therefore contains
 > **both** the `sessions` block from Word Cloud and the `boards` block, and the
 > same file is kept in both project folders. Always publish the combined file.
+> When the `boards` rules change (group chat added the `chat` rules), copy the
+> new file into the other project folders too, or publishing from one of them
+> would remove the new rules again.
 
 ---
 
@@ -367,6 +388,61 @@ Limits to know about:
   developer tools. The rules make sure the group exists and can't be changed
   once it has been set, but they can't recompute the shuffle.
 
+### Group chat
+
+When you pick groups, **Group chat** appears under *Options*, ticked by default.
+With it on, each group gets its own conversation. On the join page a collapsible
+**Group chat** card sits under *Your group*, with a badge counting messages the
+person hasn't read yet.
+
+- **Isolated**: every message is tagged with its sender's group, and the
+  database rules let a person read and post only in their own group's chat. A
+  phone never even downloads another group's conversation.
+- **Everyone can be told apart**: every message shows who sent it. Other
+  members' messages sit on the left with a coloured avatar and their name; your
+  own sit on the right and read *You*. Each person appears as **Member N**, their
+  position in the group, which is the same on every phone, or by a **chat name**
+  they type in the card, shown as *Aisha #3* so two people can't pass for each
+  other. The card tells you how you appear ("You appear as Member 2"). The number
+  comes from the person's join slot, and the rules require it to match their real
+  membership.
+- **Thumbs up**: tap 👍 under a groupmate's message to agree with it, and tap
+  again to take it back. Every message shows how many thumbs up it has and who
+  gave them (you first, then the others by member number), the same on every phone
+  in the group and in the presenter's transcript. You can't thumbs-up your own
+  message, but you can see how many it got and from whom.
+- **Presenter control**: **💬 Chat** in the side panel switches chat on or off
+  at any time (boards made before chat existed start with it off). The 💬 button
+  on a group's row in the *Groups* panel opens that group's conversation, where
+  you can delete single messages or clear the chat. **Clear** on the board also
+  deletes the group chats.
+- **Kept friendly**: messages and chat names go through the same word filter as
+  notes. As with notes, it's a best-effort filter, so the presenter's controls
+  catch the rest.
+
+Limits to know about:
+- Messages are text only, 1–300 characters. A phone loads the newest 200 messages
+  of its group.
+- Only the presenter can delete messages; the person who wrote one can't edit or
+  remove it. Deleting a message also removes its thumbs up.
+- Thumbs ups are stored per person (`chat/<id>/likes/<uid>`), so each person
+  counts once and the total can't be inflated from one phone. Like a message, each
+  one records the giver's member number and chat name, and the rules check the
+  number against their membership.
+- Chat names are shown inside the group's chat (and to the presenter) even when
+  **Show names** is off for the board.
+- Member numbers come from join slots, which the rules can't check against the
+  shuffle. A student using developer tools could claim a groupmate's number, in
+  the same way they could choose their own group.
+- Chat is not moderated before it appears. If a group gets out of hand, switch
+  chat off or clear it from the Groups panel.
+- Messages stay in the database until the presenter clears them.
+- Firebase remembers the anonymous user per browser, so **two tabs of the same
+  browser are the same student**: both get the same group and member number, and
+  every message reads *You* on the right. To try chat on one computer, use a
+  normal window plus a private window, a second browser, or a phone, one for each
+  extra student.
+
 ---
 
 ## Theming
@@ -396,6 +472,8 @@ code, so a note switches correctly when the theme changes.
 5. **Names**: optional, 1–30 characters, shown only when the presenter enables names.
    With names off, notes are anonymous to everyone, including the presenter's screen
    (the anonymous `uid` is never displayed).
+6. **Group chat**: messages follow the same trim and word-filter rules, with a limit
+   of 1–300 characters. Chat names use the same 1–30 character rule as note names.
 
 ---
 
@@ -421,6 +499,9 @@ pay-as-you-go **Blaze** plan.
 | `auth/requests-from-referer-…-are-blocked` | The API key has website restrictions. In Google Cloud Console → **APIs & Services → Credentials**, open the browser API key and add the address under **Website restrictions**, for example `http://localhost:8080/*`, `http://127.0.0.1:8080/*` or your LAN IP. Keep the existing entries. Changes take a few minutes |
 | `PERMISSION_DENIED` on post | The board is paused, or the note is empty or longer than 280 characters |
 | Participants can't see others' notes | The board is in reveal mode and hasn't been revealed yet, or notes await approval |
+| Every chat message reads *You* and sits on the right | You're testing with several tabs of one browser, which Firebase treats as one student. Open each extra student in a private window, another browser or a phone |
+| No **Group chat** card on the join page | The board has no groups, or chat is off (**💬 Chat** in the side panel). Boards made before chat existed need it switched on once |
+| Can't create a board with groups, or `PERMISSION_DENIED` on chat | The published rules are older than the chat feature. Publish the latest `database.rules.json` **before** deploying the site |
 | Blank page, module errors in console | You opened the file via `file://`; serve it over HTTP |
 
 ---

@@ -3,6 +3,7 @@
 import * as db from "./db.js";
 import { toSortedList } from "./posts.js";
 import { renderBoard, columnsOf, groupChip } from "./board.js";
+import { chatList, renderChat } from "./chat.js";
 import { MAX_GROUPS, groupCountOf, groupLabel, randomSeed } from "./groups.js";
 import { initThemeToggle } from "./theme.js";
 import { $, toast, show, storageGet, storageSet, boardCodeFromUrl } from "./ui.js";
@@ -28,6 +29,8 @@ const state = {
   pending: {},
   likes: {},
   members: {},         // { uid: { group, slot, ts } } for everyone placed in a group
+  chat: {},            // every group's chat messages
+  chatGroup: null,     // group whose chat is open in the dialog
   groupFilter: null,   // show only this group's notes
   sort: storageGet(SORT_KEY) || "newest",
   noteSizes: {},       // per-note sizes set by dragging, remembered per board in this browser
@@ -78,6 +81,9 @@ function showSetup() {
   const groupsInput = $("#groups-input");
   groupsInput.append(new Option("Off", "0"));
   for (let n = 2; n <= MAX_GROUPS; n++) groupsInput.append(new Option(`${n} groups`, String(n)));
+  const syncChatOption = () => show($("#chat-option"), Number(groupsInput.value) > 0);
+  groupsInput.addEventListener("change", syncChatOption);
+  syncChatOption();
 
   DEFAULT_COLUMNS.forEach((name) => addColumnInput(name));
   $("#add-column").addEventListener("click", () => addColumnInput("").querySelector("input").focus());
@@ -100,7 +106,7 @@ function showSetup() {
       maxPerUser: Number($("#max-input").value),
     };
     const groups = Number(groupsInput.value);
-    if (groups) Object.assign(settings, { groups, groupSeed: randomSeed() });
+    if (groups) Object.assign(settings, { groups, groupSeed: randomSeed(), chat: $("#chat-input").checked });
     if (layout === "columns") {
       const names = [...document.querySelectorAll("#column-inputs input")]
         .map((i) => i.value.trim().slice(0, 40))
@@ -192,6 +198,7 @@ function startBoard(code, isOwner) {
     db.watchPosts(code, (posts) => { state.posts = posts; render(); }, onActionError);
     db.watchPending(code, (pending) => { state.pending = pending; render(); }, onActionError);
     db.watchMembers(code, (members) => { state.members = members; render(); }, onActionError);
+    db.watchAllChat(code, (chat) => { state.chat = chat; render(); }, onActionError);
   }
 }
 
@@ -236,6 +243,8 @@ function render() {
 
   const columns = columnsOf(meta);
   const groupCount = groupCountOf(meta);
+  show($("#chat-btn"), groupCount > 0);
+  $("#chat-btn").textContent = meta.chat === true ? "💬 Chat: on" : "💬 Chat: off";
   if (state.groupFilter > groupCount) state.groupFilter = null;
   const notes = toSortedList(state.posts, state.likes, state.sort);
   const shown = state.groupFilter ? notes.filter((n) => n.group === state.groupFilter) : notes;
@@ -264,9 +273,10 @@ function render() {
 
   renderPending(pending);
   renderGroups(groupCount, notes);
+  renderChatDialog();
 }
 
-/** Live size of each group, plus buttons to show one group's notes at a time. */
+/** Live size of each group, plus buttons to show one group's notes or open its chat. */
 function renderGroups(groupCount, notes) {
   show($("#groups-panel"), state.isOwner && groupCount > 0);
   if (!state.isOwner || !groupCount) return;
@@ -275,6 +285,8 @@ function renderGroups(groupCount, notes) {
   for (const m of Object.values(state.members)) if (m.group <= groupCount) sizes[m.group]++;
   const noteCounts = new Array(groupCount + 1).fill(0);
   for (const n of notes) if (n.group <= groupCount) noteCounts[n.group]++;
+  const messageCounts = new Array(groupCount + 1).fill(0);
+  for (const m of Object.values(state.chat)) if (m.group <= groupCount) messageCounts[m.group]++;
   const joined = sizes.reduce((a, b) => a + b, 0);
   $("#groups-total").textContent = `· ${joined} joined`;
 
@@ -294,13 +306,48 @@ function renderGroups(groupCount, notes) {
     count.textContent = `${noteCounts[group]} ${noteCounts[group] === 1 ? "note" : "notes"}`;
     btn.append(groupChip(group), people, count);
     btn.addEventListener("click", () => setGroupFilter(pressed ? null : group));
-    return btn;
+
+    const item = document.createElement("div");
+    item.className = "group-item";
+    item.append(btn);
+    if (state.meta.chat === true || messageCounts[group]) {
+      item.append(button(`💬 ${messageCounts[group]}`, "btn small", () => openChat(group), `Open ${groupLabel(group)}'s chat`));
+    }
+    return item;
   }));
 }
 
 function setGroupFilter(group) {
   state.groupFilter = group;
   render();
+}
+
+/* ---------- Group chat ---------- */
+
+function openChat(group) {
+  state.chatGroup = group;
+  renderChatDialog();
+  $("#chat-dialog").showModal();
+}
+
+/** Read-only transcript of one group's chat, with buttons to remove messages. */
+function renderChatDialog() {
+  const group = state.chatGroup;
+  if (!group) return;
+  const messages = chatList(state.chat).filter((m) => m.group === group);
+  $("#chat-dialog-title").replaceChildren(groupChip(group), ` chat · ${messages.length} ${messages.length === 1 ? "message" : "messages"}`);
+  $("#chat-clear-btn").disabled = messages.length === 0;
+  renderChat($("#chat-dialog-log"), messages, {
+    groupCount: groupCountOf(state.meta),
+    emptyText: "No messages yet",
+    actions: (m) => [["🗑", "Delete message", () => db.removeChat(state.code, [m.id]).catch(onActionError)]],
+  });
+}
+
+function clearChat() {
+  const ids = chatList(state.chat).filter((m) => m.group === state.chatGroup).map((m) => m.id);
+  if (!ids.length || !confirm(`Delete all ${ids.length} messages in ${groupLabel(state.chatGroup)}'s chat? This cannot be undone.`)) return;
+  db.removeChat(state.code, ids).then(() => toast("Chat cleared")).catch(onActionError);
 }
 
 function resizeNote(note, size, done) {
@@ -403,9 +450,12 @@ function wireControls() {
     render();
   });
 
-  $("#note-dialog").addEventListener("click", (e) => {
-    if (e.target === e.currentTarget) e.currentTarget.close(); // click on the backdrop
-  });
+  for (const dialog of document.querySelectorAll("dialog")) {
+    dialog.addEventListener("click", (e) => {
+      if (e.target === e.currentTarget) e.currentTarget.close(); // click on the backdrop
+    });
+  }
+  $("#chat-dialog").addEventListener("close", () => { state.chatGroup = null; });
 
   $("#filter-badge").addEventListener("click", () => setGroupFilter(null));
 
@@ -430,6 +480,9 @@ function wireControls() {
     toggleMeta("approval", false, ["Approval mode off: new notes appear straight away", "Approval mode on: new notes wait for you"]));
   $("#names-btn").addEventListener("click",
     toggleMeta("showNames", false, ["Names hidden", "Names shown"]));
+  $("#chat-btn").addEventListener("click",
+    toggleMeta("chat", false, ["Group chat off", "Group chat on"]));
+  $("#chat-clear-btn").addEventListener("click", clearChat);
 
   $("#approve-all-btn").addEventListener("click", () => {
     const waiting = toSortedList(state.pending).filter((n) => !n.hidden);
@@ -447,7 +500,8 @@ function wireControls() {
   });
 
   $("#clear-btn").addEventListener("click", () => {
-    if (!confirm("Delete all notes and likes? This cannot be undone.")) return;
+    const what = groupCountOf(state.meta) ? "notes, likes and group chats" : "notes and likes";
+    if (!confirm(`Delete all ${what}? This cannot be undone.`)) return;
     db.clearBoard(state.code).then(() => toast("Board cleared")).catch(onActionError);
   });
 

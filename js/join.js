@@ -4,12 +4,16 @@
 import * as db from "./db.js";
 import { validate, cleanName, toSortedList, COLORS, MAX_LEN } from "./posts.js";
 import { renderBoard, columnsOf } from "./board.js";
-import { groupCountOf, groupLabel, groupHue } from "./groups.js";
+import { validateMessage, chatList, renderChat, memberLabel } from "./chat.js";
+import { groupCountOf, groupLabel, groupHue, memberNumber } from "./groups.js";
 import { initThemeToggle } from "./theme.js";
 import { $, toast, show, storageGet, storageSet, boardCodeFromUrl } from "./ui.js";
 
 const NAME_KEY = "pinboardName";
 const COLOR_KEY = "pinboardColor";
+const CHAT_NAME_KEY = "pinboardChatName";
+const CHAT_OPEN_KEY = "pinboardChatOpen";
+const CHAT_SEEN_KEY = "pinboardChatSeen:"; // + board code
 
 const state = {
   code: null,
@@ -20,8 +24,12 @@ const state = {
   myPending: {},    // this participant's notes awaiting approval or hidden
   likes: {},
   group: null,      // this participant's group number, once assigned
+  slot: null,       // their join slot, which tells the members of a group apart in chat
   joining: null,    // promise while being placed in a group
   groupFailed: false,
+  chat: {},         // messages in this participant's group
+  chatSeen: 0,      // timestamp of the newest message from others that they have read
+  unwatchChat: null,
   color: storageGet(COLOR_KEY) || COLORS[0],
   column: null,
   editing: null,    // { id, where } while editing one of your notes
@@ -43,12 +51,14 @@ async function main() {
 
   state.code = code;
   state.uid = await db.ready();
+  state.chatSeen = Number(storageGet(CHAT_SEEN_KEY + code)) || 0;
   $("#board-code").textContent = code;
 
   db.watchMeta(code, (meta) => {
     state.meta = meta;
     if (meta) {
       syncPostsListener();
+      syncChatListener();
       if (groupCountOf(meta) && !state.groupFailed) ensureGroup();
     }
     render();
@@ -58,6 +68,7 @@ async function main() {
   db.watchLikes(code, (likes) => { state.likes = likes; render(); });
 
   wireForm();
+  wireChat();
 }
 
 /** The rules let participants read everyone's notes only while the board is revealed. */
@@ -81,7 +92,12 @@ function syncPostsListener() {
 function ensureGroup() {
   if (state.group || state.joining) return state.joining;
   state.joining = db.joinGroup(state.code, state.uid, state.meta)
-    .then((group) => { state.group = group; state.groupFailed = false; })
+    .then(({ group, slot }) => {
+      state.group = group;
+      state.slot = slot;
+      state.groupFailed = false;
+      syncChatListener();
+    })
     .catch((err) => {
       console.error(err);
       state.groupFailed = true;
@@ -89,6 +105,20 @@ function ensureGroup() {
     })
     .finally(() => { state.joining = null; render(); });
   return state.joining;
+}
+
+/** Read this group's chat while the presenter has chat on and the person has a group. */
+function syncChatListener() {
+  const wanted = state.meta?.chat === true && groupCountOf(state.meta) > 0 && !!state.group;
+  if (wanted && !state.unwatchChat) {
+    state.unwatchChat = db.watchChat(state.code, state.group, (chat) => { state.chat = chat; renderChatLog(); }, () => {
+      state.unwatchChat = null;
+    });
+  } else if (!wanted && state.unwatchChat) {
+    state.unwatchChat();
+    state.unwatchChat = null;
+    state.chat = {};
+  }
 }
 
 function showCodeEntry() {
@@ -128,6 +158,7 @@ function render() {
   document.title = `${meta.title} · Live Pin Board`;
 
   renderGroup(meta);
+  renderChatCard(meta);
   renderForm(meta);
   renderNotes(meta);
 }
@@ -141,6 +172,50 @@ function renderGroup(meta) {
     : state.groupFailed ? "Couldn't find your group" : "Finding your group…";
   card.classList.toggle("assigned", !!state.group);
   if (state.group) card.style.setProperty("--group-hue", groupHue(state.group));
+}
+
+/** The group chat is offered while the presenter has chat on. */
+function renderChatCard(meta) {
+  const groups = groupCountOf(meta);
+  const card = $("#chat-card");
+  show(card, meta.chat === true && groups > 0);
+  if (card.hidden) return;
+
+  const placed = !!state.group;
+  const number = placed ? memberNumber(state.slot, groups) : 0;
+  const you = memberLabel(cleanName($("#chat-name").value), number);
+  $("#chat-hint").textContent = placed
+    ? `Only ${groupLabel(state.group)} can read this chat. You appear as ${you}.`
+    : state.groupFailed ? "Couldn't find your group." : "Finding your group…";
+  $("#chat-name").placeholder = placed ? `Member ${number}` : "Member";
+  $("#chat-message").disabled = !placed;
+  $("#chat-send").disabled = !placed;
+}
+
+function renderChatLog() {
+  const messages = chatList(state.chat);
+  renderChat($("#chat-log"), messages, {
+    groupCount: groupCountOf(state.meta),
+    myUid: state.uid,
+    onLike: (m, liked) => db.setChatLike(state.code, m.id, state.uid, liked, {
+      slot: state.slot,
+      name: cleanName($("#chat-name").value),
+    }).catch(chatFailed),
+    emptyText: "No messages yet. Say hello! 👋",
+  });
+
+  if ($("#chat-card").open) markChatRead(messages);
+  const unread = messages.filter((m) => m.uid !== state.uid && m.ts > state.chatSeen).length;
+  $("#chat-unread").textContent = unread;
+  show($("#chat-unread"), unread > 0);
+}
+
+/** Remember how far the person has read, so reopening the page doesn't flag old messages as new. */
+function markChatRead(messages) {
+  const newest = messages.reduce((t, m) => (m.uid !== state.uid ? Math.max(t, m.ts) : t), state.chatSeen);
+  if (newest === state.chatSeen) return;
+  state.chatSeen = newest;
+  storageSet(CHAT_SEEN_KEY + state.code, String(newest));
 }
 
 function renderForm(meta) {
@@ -295,6 +370,64 @@ function wireForm() {
       render();
     }
   });
+}
+
+function wireChat() {
+  const card = $("#chat-card");
+  card.open = storageGet(CHAT_OPEN_KEY) === "1";
+  card.addEventListener("toggle", () => {
+    storageSet(CHAT_OPEN_KEY, card.open ? "1" : "0");
+    if (!card.open) return;
+    renderChatLog();
+    const log = $("#chat-log");
+    log.scrollTop = log.scrollHeight;
+  });
+
+  const nameInput = $("#chat-name");
+  nameInput.value = storageGet(CHAT_NAME_KEY) || "";
+  nameInput.addEventListener("input", () => { if (state.meta) renderChatCard(state.meta); });
+  nameInput.addEventListener("change", () => storageSet(CHAT_NAME_KEY, cleanName(nameInput.value)));
+  nameInput.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault(); // carry on to the message instead of sending an empty one
+    $("#chat-message").focus();
+  });
+
+  $("#chat-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    sendMessage();
+  });
+}
+
+/** The message shows up at once; if the database refuses it, it vanishes again and the text comes back. */
+function sendMessage() {
+  const input = $("#chat-message");
+  if (!state.group) return;
+
+  const result = validateMessage(input.value);
+  if (!result.ok) return toast(result.error);
+
+  input.value = "";
+  db.sendChat(state.code, {
+    uid: state.uid,
+    group: state.group,
+    slot: state.slot,
+    name: cleanName($("#chat-name").value),
+    text: result.text,
+  }).catch((err) => {
+    if (!input.value) input.value = result.text;
+    chatFailed(err);
+  });
+
+  const log = $("#chat-log");
+  log.scrollTop = log.scrollHeight;
+}
+
+/** A message or thumbs up that the database refused or couldn't deliver. */
+function chatFailed(err) {
+  console.error(err);
+  const denied = String(err?.code || err?.message).toLowerCase().includes("permission");
+  toast(denied ? "Chat is switched off right now." : "Couldn't send. Check your connection and try again.", 4000);
 }
 
 function startEdit(note) {

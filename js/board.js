@@ -19,7 +19,7 @@ function cacheFor(container) {
   return cache;
 }
 
-function el(tag, className, text) {
+export function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text != null) node.textContent = text;

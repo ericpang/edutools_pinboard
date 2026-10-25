@@ -41,6 +41,22 @@
         <p id="group-name" class="group-name">Finding your group…</p>
       </div>
 
+      <details id="chat-card" class="card chat-card" hidden>
+        <summary><span>💬 Group chat</span> <strong id="chat-unread" class="count-pill" hidden></strong></summary>
+        <p id="chat-hint" class="field-help"></p>
+        <div id="chat-log" class="chat-log" role="log" aria-label="Messages in your group"></div>
+        <form id="chat-form" class="chat-form" autocomplete="off">
+          <label class="chat-name">Chat name
+            <input id="chat-name" maxlength="30" placeholder="Member" enterkeyhint="next" autocomplete="off">
+          </label>
+          <div class="chat-compose">
+            <input id="chat-message" maxlength="300" placeholder="Message your group…"
+                   aria-label="Message your group" enterkeyhint="send" autocomplete="off">
+            <button id="chat-send" class="btn primary" type="submit">Send</button>
+          </div>
+        </form>
+      </details>
+
       <div class="card">
         <p class="eyebrow">Board <span id="board-code"></span></p>
         <h1 id="title"></h1>

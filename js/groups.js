@@ -29,6 +29,12 @@ export function groupForSlot(slot, groupCount, seed) {
   return order[slot % groupCount];
 }
 
+/**
+ * Position of a person within their group, counting from 1. Every round gives each group exactly
+ * one slot, so the round number tells the members of a group apart.
+ */
+export const memberNumber = (slot, groupCount) => Math.floor(slot / groupCount) + 1;
+
 export const groupCountOf = (meta) => (meta?.groups > 1 ? meta.groups : 0);
 
 export const groupLabel = (group) => `Group ${group}`;
