@@ -111,6 +111,7 @@
             ".validate": "newData.hasChildren(['group', 'slot', 'ts'])",
             "group": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= root.child('boards/' + $code + '/meta/groups').val()" },
             "slot": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() < root.child('boards/' + $code + '/joinCount').val()" },
+            "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 30" },
             "ts": { ".validate": "newData.isNumber() && newData.val() === now" },
             "$other": { ".validate": false }
           }

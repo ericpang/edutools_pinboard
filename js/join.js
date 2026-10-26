@@ -1,5 +1,5 @@
-// Participant page: enter a code (or arrive via QR), get placed in a group, add/edit/delete notes,
-// see the board, like.
+// Participant page: enter a code (or arrive via QR), give a name and get placed in a group, add/edit/delete
+// notes, see the board, like.
 
 import * as db from "./db.js";
 import { validate, cleanName, toSortedList, COLORS, MAX_LEN } from "./posts.js";
@@ -25,7 +25,8 @@ const state = {
   likes: {},
   group: null,      // this participant's group number, once assigned
   slot: null,       // their join slot, which tells the members of a group apart in chat
-  joining: null,    // promise while being placed in a group
+  looked: false,    // whether the database has been asked if they already have a group
+  joining: null,    // promise while looking for or being placed in a group
   groupFailed: false,
   chat: {},         // messages in this participant's group
   chatSeen: 0,      // timestamp of the newest message from others that they have read
@@ -59,7 +60,7 @@ async function main() {
     if (meta) {
       syncPostsListener();
       syncChatListener();
-      if (groupCountOf(meta) && !state.groupFailed) ensureGroup();
+      if (groupCountOf(meta) && !state.groupFailed) findGroup();
     }
     render();
   });
@@ -69,6 +70,7 @@ async function main() {
 
   wireForm();
   wireChat();
+  wireJoin();
 }
 
 /** The rules let participants read everyone's notes only while the board is revealed. */
@@ -86,25 +88,48 @@ function syncPostsListener() {
 }
 
 /**
- * Join a group as soon as the board is known. Rejoining from the same phone keeps the same group.
- * After a failure it isn't retried on every board update, only when the person next pins a note.
+ * Once the board is known, see whether this phone already has a group; rejoining keeps it. If not, the
+ * join card asks for a name, and joinGroup places the person. After a failure nothing is retried until
+ * the page is reloaded.
  */
-function ensureGroup() {
-  if (state.group || state.joining) return state.joining;
-  state.joining = db.joinGroup(state.code, state.uid, state.meta)
-    .then(({ group, slot }) => {
-      state.group = group;
-      state.slot = slot;
-      state.groupFailed = false;
-      syncChatListener();
-    })
+function findGroup() {
+  if (state.group || state.joining || state.looked) return;
+  track(db.findMembership(state.code, state.uid).then((found) => {
+    state.looked = true;
+    if (found) placed(found);
+  }));
+}
+
+function joinGroup(name) {
+  if (state.group || state.joining) return;
+  track(db.joinGroup(state.code, state.uid, state.meta, name).then(placed));
+}
+
+/** Run one lookup or join at a time, and re-render when it settles. */
+function track(promise) {
+  state.joining = promise
     .catch((err) => {
       console.error(err);
       state.groupFailed = true;
       toast("Couldn't place you in a group. Reload the page to try again.", 5000);
     })
     .finally(() => { state.joining = null; render(); });
-  return state.joining;
+}
+
+function placed({ group, slot, name }) {
+  state.group = group;
+  state.slot = slot;
+  state.groupFailed = false;
+  if (name) setName(name);
+  syncChatListener();
+}
+
+/** One name for the join card, notes and chat. */
+function setName(name) {
+  $("#join-name").value = name;
+  $("#name-input").value = name;
+  $("#chat-name").value = name;
+  storageSet(NAME_KEY, name);
 }
 
 /** Read this group's chat while the presenter has chat on and the person has a group. */
@@ -163,10 +188,16 @@ function render() {
   renderNotes(meta);
 }
 
+/** With groups on, notes and chat wait until the person has given a name and been placed. */
 function renderGroup(meta) {
   const card = $("#group-card");
-  show(card, groupCountOf(meta) > 0);
-  if (!groupCountOf(meta)) return;
+  const grouped = groupCountOf(meta) > 0;
+  const needsName = grouped && state.looked && !state.group && !state.groupFailed;
+  show($("#join-card"), needsName);
+  $("#join-btn").disabled = !!state.joining;
+  show($("#post-card"), !grouped || !!state.group);
+  show(card, grouped && !needsName);
+  if (!grouped) return;
   const name = $("#group-name");
   name.textContent = state.group ? groupLabel(state.group)
     : state.groupFailed ? "Couldn't find your group" : "Finding your group…";
@@ -178,18 +209,13 @@ function renderGroup(meta) {
 function renderChatCard(meta) {
   const groups = groupCountOf(meta);
   const card = $("#chat-card");
-  show(card, meta.chat === true && groups > 0);
+  show(card, meta.chat === true && groups > 0 && !!state.group);
   if (card.hidden) return;
 
-  const placed = !!state.group;
-  const number = placed ? memberNumber(state.slot, groups) : 0;
+  const number = memberNumber(state.slot, groups);
   const you = memberLabel(cleanName($("#chat-name").value), number);
-  $("#chat-hint").textContent = placed
-    ? `Only ${groupLabel(state.group)} can read this chat. You appear as ${you}.`
-    : state.groupFailed ? "Couldn't find your group." : "Finding your group…";
-  $("#chat-name").placeholder = placed ? `Member ${number}` : "Member";
-  $("#chat-message").disabled = !placed;
-  $("#chat-send").disabled = !placed;
+  $("#chat-hint").textContent = `Only ${groupLabel(state.group)} can read this chat. You appear as ${you}.`;
+  $("#chat-name").placeholder = `Member ${number}`;
 }
 
 function renderChatLog() {
@@ -349,11 +375,11 @@ function wireForm() {
     const result = validate(input.value);
     if (!result.ok) return setStatus(result.error, "error", true);
     if (!state.editing && used() >= limit()) return;
+    if (groupCountOf(state.meta) && !state.group) return setStatus("Join your group first.", "error", true);
 
     state.submitting = true;
     render();
     try {
-      if (groupCountOf(state.meta) && !state.editing) await ensureGroup();
       const color = groupCountOf(state.meta) && state.group
         ? groupColor(state.group, state.meta.groupSeed) : state.color;
       const fields = { text: result.text, color, column: state.column };
@@ -378,6 +404,19 @@ function wireForm() {
       state.submitting = false;
       render();
     }
+  });
+}
+
+/** The name asked for when joining a group; it is the one shown to the presenter in the group's member list. */
+function wireJoin() {
+  const input = $("#join-name");
+  input.value = storageGet(NAME_KEY) || storageGet(CHAT_NAME_KEY) || "";
+  $("#join-card").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const name = cleanName(input.value);
+    const error = $("#join-error");
+    error.textContent = name ? "" : input.value.trim() ? "Please choose a different name." : "Please enter your name.";
+    if (name) joinGroup(name);
   });
 }
 

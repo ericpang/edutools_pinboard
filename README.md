@@ -118,7 +118,7 @@ and shares the posts. Every browser connects directly to Firebase:
 - Mobile-first layout with large tap targets
 - Shows the question and an **Add a note** form: text box (280-character limit with a counter), colour picker and, in Columns layout, a column picker
 - Optional name field, shown only when the presenter allows names. The name is remembered on that phone
-- When groups are on, shows **"Your group: Group N"** at the top as soon as the person joins
+- When groups are on, first asks for **their name**, then shows **"Your group: Group N"** at the top. The note form and chat appear once they have joined
 - When group chat is on, a collapsible **Group chat** card under it lets the person talk with the others in their group, and give a 👍 to their messages. A badge counts messages they haven't read
 - Lets each person add several notes, with a configurable limit (default 3)
 - Shows the **live board** below the form; the person's own notes are marked "You" and can be **edited or deleted** while the board is open
@@ -240,7 +240,7 @@ exist in both apps without clashing.
       },
       "joinCount": 7,                 // how many people have been placed in a group
       "members": {
-        "<uid>": { "group": 2, "slot": 6, "ts": 1760000000500 }
+        "<uid>": { "group": 2, "slot": 6, "name": "Aisha", "ts": 1760000000500 }
       },
       "chat": {                       // group chat: one flat list, each message tagged with its group
         "-Ob1c...": {
@@ -277,7 +277,7 @@ The rules live in `database.rules.json`. They enforce:
 | A participant | Create a note while `open` is true, tagged with their own `uid` and server timestamp; text 1–280 characters; colour from the palette; column must exist. It goes into `posts`, or into `pending` when approval mode is on |
 | A participant | Edit or delete their own note while `open` is true. In approval mode, approved notes can be deleted but not edited, so an edit can't slip past moderation. They cannot change `uid`, `ts`, `highlighted` or `hidden` |
 | A participant | Add or remove only their own like (`likes/$postId/<their uid>`), and only on a note in `posts` |
-| A participant | On a board with groups: add exactly 1 to `joinCount`, then write their own `members/<their uid>` once (it can't be changed afterwards). A note's `group` must match their own group |
+| A participant | On a board with groups: add exactly 1 to `joinCount`, then write their own `members/<their uid>` once, with the name they gave when joining (1–30 characters; it can't be changed afterwards). A note's `group` must match their own group |
 | A participant | On a board with groups and chat on: post to **their own group's** chat (the message's `group`, `uid` and `slot` must match their own membership; 1–300 characters, optional name up to 30), and read **only their own group's** messages. They can give a thumbs up to a groupmate's message (one per person, never to their own message or another group's; it records who gave it, and the member number must match their own membership). They can't edit or delete messages |
 | The presenter (owner) | Everything on their board: edit `meta`, read `pending`, approve, hide, highlight, delete notes, read every group's chat and delete messages, clear the board |
 
@@ -363,7 +363,7 @@ the same browser and keep control of the board.
 ## Random groups
 
 Pick a number of groups under **Random groups** when you create a board. Each
-person is placed in a group the moment they open the join page:
+person enters their name on the join page and is then placed in a group:
 
 - **Balanced**: each joiner takes the next number from a shared counter
   (`joinCount`). Numbers are dealt out in rounds, and every round gives each
@@ -377,8 +377,11 @@ person is placed in a group the moment they open the join page:
 
 The presenter's side panel lists each group with how many people have joined
 it and how many notes it has posted. Click a group to show only its notes, and
-click it again (or the *Showing Group N only* badge) to show everyone. Notes
-carry a coloured group tag, and the CSV export has a `group` column.
+click it again (or the *Showing Group N only* badge) to show everyone. The 👥
+button on a group's row lists its members by the name they gave when joining,
+with each person's note and message counts. Boards made before names were asked
+for show those members as *Member N*. Notes carry a coloured group tag, and the
+CSV export has a `group` column.
 
 Limits to know about:
 - The number of groups is set when the board is created and can't be changed later.

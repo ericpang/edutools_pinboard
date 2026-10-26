@@ -4,7 +4,7 @@ import * as db from "./db.js";
 import { toSortedList } from "./posts.js";
 import { renderBoard, columnsOf, groupChip } from "./board.js";
 import { chatList, renderChat } from "./chat.js";
-import { MAX_GROUPS, groupCountOf, groupLabel, groupColor, randomSeed } from "./groups.js";
+import { MAX_GROUPS, groupCountOf, groupLabel, groupColor, memberNumber, randomSeed } from "./groups.js";
 
 /** The colour a note shows: its group's colour in group mode, otherwise the one its author picked. */
 const noteColor = (note) =>
@@ -35,9 +35,10 @@ const state = {
   posts: {},
   pending: {},
   likes: {},
-  members: {},         // { uid: { group, slot, ts } } for everyone placed in a group
+  members: {},         // { uid: { group, slot, name, ts } } for everyone placed in a group
   chat: {},            // every group's chat messages
   chatGroup: null,     // group whose chat is open in the dialog
+  membersGroup: null,  // group whose member list is open in the dialog
   groupFilter: null,   // show only this group's notes
   sort: storageGet(SORT_KEY) || "newest",
   noteSizes: {},       // per-note sizes set by dragging, remembered per board in this browser
@@ -282,9 +283,10 @@ function render() {
   renderPending(pending);
   renderGroups(groupCount, notes);
   renderChatDialog();
+  renderMembersDialog();
 }
 
-/** Live size of each group, plus buttons to show one group's notes or open its chat. */
+/** Live size of each group, plus buttons to show one group's notes, see who is in it or open its chat. */
 function renderGroups(groupCount, notes) {
   show($("#groups-panel"), state.isOwner && groupCount > 0);
   if (!state.isOwner || !groupCount) return;
@@ -317,7 +319,7 @@ function renderGroups(groupCount, notes) {
 
     const item = document.createElement("div");
     item.className = "group-item";
-    item.append(btn);
+    item.append(btn, button("👥", "btn small", () => openMembers(group), `Who is in ${groupLabel(group)}`));
     if (state.meta.chat === true || messageCounts[group]) {
       item.append(button(`💬 ${messageCounts[group]}`, "btn small", () => openChat(group), `Open ${groupLabel(group)}'s chat`));
     }
@@ -328,6 +330,38 @@ function renderGroups(groupCount, notes) {
 function setGroupFilter(group) {
   state.groupFilter = group;
   render();
+}
+
+/* ---------- Group members ---------- */
+
+function openMembers(group) {
+  state.membersGroup = group;
+  renderMembersDialog();
+  $("#members-dialog").showModal();
+}
+
+/** Who is in one group, by the name they gave when they joined, with how much each has contributed. */
+function renderMembersDialog() {
+  const group = state.membersGroup;
+  if (!group) return;
+  const groupCount = groupCountOf(state.meta);
+  const count = (items, uid) => Object.values(items).filter((x) => x.uid === uid).length;
+  const members = Object.entries(state.members)
+    .filter(([, m]) => m.group === group)
+    .sort(([, a], [, b]) => a.slot - b.slot);
+
+  $("#members-dialog-title").replaceChildren(groupChip(group), ` · ${members.length} ${members.length === 1 ? "member" : "members"}`);
+  $("#members-list").replaceChildren(...(members.length ? members.map(([uid, m]) => {
+    const li = document.createElement("li");
+    const name = document.createElement("strong");
+    name.textContent = m.name || `Member ${memberNumber(m.slot, groupCount)}`;
+    const notes = count(state.posts, uid) + count(state.pending, uid);
+    const stats = document.createElement("small");
+    stats.className = "muted";
+    stats.textContent = `${notes} ${notes === 1 ? "note" : "notes"} · ${count(state.chat, uid)} 💬`;
+    li.append(name, stats);
+    return li;
+  }) : [Object.assign(document.createElement("li"), { className: "muted", textContent: "Nobody has joined yet" })]));
 }
 
 /* ---------- Group chat ---------- */
@@ -464,6 +498,7 @@ function wireControls() {
     });
   }
   $("#chat-dialog").addEventListener("close", () => { state.chatGroup = null; });
+  $("#members-dialog").addEventListener("close", () => { state.membersGroup = null; });
 
   $("#filter-badge").addEventListener("click", () => setGroupFilter(null));
 

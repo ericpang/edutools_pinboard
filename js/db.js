@@ -84,7 +84,7 @@ export function watchLikes(code, callback) {
   return onValue(boardRef(code, "likes"), (snap) => callback(snap.val() || {}));
 }
 
-/** Presenter only: { uid: { group, slot, ts } } for everyone placed in a group. */
+/** Presenter only: { uid: { group, slot, name, ts } } for everyone placed in a group. */
 export function watchMembers(code, callback, onError) {
   return onValue(boardRef(code, "members"), (snap) => callback(snap.val() || {}), onError);
 }
@@ -102,24 +102,31 @@ export function watchAllChat(code, callback, onError) {
 
 /* ---------- Participant writes ---------- */
 
-const placement = ({ group, slot }) => ({ group, slot });
+const placement = ({ group, slot, name }) => ({ group, slot, name: name || "" });
+
+/** This participant's group, join slot and name as { group, slot, name }, or null if they haven't joined. */
+export async function findMembership(code, uid) {
+  const existing = await get(boardRef(code, `members/${uid}`));
+  return existing.exists() ? placement(existing.val()) : null;
+}
 
 /**
- * Place this participant in a group, or return the one they already have, as { group, slot }.
- * The slot counter is claimed in a transaction, so two people joining at once never share a slot.
+ * Place this participant in a group under the name they gave, or return the one they already have,
+ * as { group, slot, name }. The slot counter is claimed in a transaction, so two people joining at
+ * once never share a slot.
  */
-export async function joinGroup(code, uid, meta) {
+export async function joinGroup(code, uid, meta, name) {
   const mine = boardRef(code, `members/${uid}`);
-  const existing = await get(mine);
-  if (existing.exists()) return placement(existing.val());
+  const existing = await findMembership(code, uid);
+  if (existing) return existing;
 
   const { committed, snapshot } = await runTransaction(boardRef(code, "joinCount"), (n) => (n || 0) + 1);
   if (!committed) throw new Error("Could not join a group.");
   const slot = snapshot.val() - 1;
   const group = groupForSlot(slot, meta.groups, meta.groupSeed || 0);
   try {
-    await set(mine, { group, slot, ts: serverTimestamp() });
-    return { group, slot };
+    await set(mine, { group, slot, name, ts: serverTimestamp() });
+    return { group, slot, name };
   } catch (err) {
     // Another tab on this device got there first; use its group
     const again = await get(mine);
