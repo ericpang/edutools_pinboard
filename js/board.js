@@ -56,7 +56,8 @@ function card(cache, note, opts) {
     cache.set(note.id, node);
   }
   const mine = opts.myUid && note.uid === opts.myUid;
-  node.className = `note note-${note.color || "yellow"}${node.classList.contains("pop") ? " pop" : ""}`;
+  const color = opts.groupColor && note.group ? opts.groupColor(note.group) : note.color || "yellow";
+  node.className = `note note-${color}${node.classList.contains("pop") ? " pop" : ""}`;
   node.classList.toggle("highlighted", note.highlighted === true);
   node.classList.toggle("mine", !!mine);
   node.classList.toggle("concealed", !!opts.concealed);
@@ -198,6 +199,7 @@ function resizeHandle(node, note, opts) {
  *   columns     [{id, name}] for Columns layout, [] for Wall
  *   showNames   show author names
  *   showGroups  tag each note with its author's group
+ *   groupColor  (group) => colour name; when set, grouped notes take their group's colour
  *   myUid       marks the viewer's own notes
  *   concealed   show card backs only (reveal mode on the projector)
  *   actions     note → [[label, title, onClick], ...] extra buttons per note

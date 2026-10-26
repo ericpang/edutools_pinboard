@@ -5,7 +5,7 @@ import * as db from "./db.js";
 import { validate, cleanName, toSortedList, COLORS, MAX_LEN } from "./posts.js";
 import { renderBoard, columnsOf } from "./board.js";
 import { validateMessage, chatList, renderChat, memberLabel } from "./chat.js";
-import { groupCountOf, groupLabel, groupHue, memberNumber } from "./groups.js";
+import { groupCountOf, groupLabel, groupHue, groupColor, memberNumber } from "./groups.js";
 import { initThemeToggle } from "./theme.js";
 import { $, toast, show, storageGet, storageSet, boardCodeFromUrl } from "./ui.js";
 
@@ -232,6 +232,7 @@ function renderForm(meta) {
   show($("#name-field"), meta.showNames === true && !state.editing);
 
   renderColumnChoices(columnsOf(meta), disabled);
+  show($("#color-field"), groupCountOf(meta) === 0); // in group mode the group decides the colour
   for (const btn of document.querySelectorAll("#color-choices button")) {
     btn.disabled = disabled;
     btn.setAttribute("aria-checked", String(btn.dataset.color === state.color));
@@ -282,6 +283,7 @@ function renderNotes(meta) {
     columns: columnsOf(meta),
     showNames: meta.showNames === true,
     showGroups: groupCountOf(meta) > 0,
+    groupColor: groupCountOf(meta) > 0 ? (g) => groupColor(g, meta.groupSeed) : null,
     myUid: state.uid,
     emptyText: revealed ? "No notes yet. Be the first!" : "You haven't pinned anything yet.",
     likedByMe: (n) => state.likes[n.id]?.[state.uid] === true,
@@ -330,8 +332,13 @@ function wireForm() {
   }));
 
   const nameInput = $("#name-input");
-  nameInput.value = storageGet(NAME_KEY) || "";
+  nameInput.value = storageGet(NAME_KEY) || storageGet(CHAT_NAME_KEY) || "";
   nameInput.addEventListener("change", () => storageSet(NAME_KEY, cleanName(nameInput.value)));
+  // One name for notes and chat: typing in either field fills in the other
+  nameInput.addEventListener("input", () => {
+    $("#chat-name").value = nameInput.value;
+    if (state.meta) renderChatCard(state.meta);
+  });
 
   $("#cancel-edit").addEventListener("click", () => stopEdit());
 
@@ -343,17 +350,19 @@ function wireForm() {
     if (!result.ok) return setStatus(result.error, "error", true);
     if (!state.editing && used() >= limit()) return;
 
-    const fields = { text: result.text, color: state.color, column: state.column };
     state.submitting = true;
     render();
     try {
+      if (groupCountOf(state.meta) && !state.editing) await ensureGroup();
+      const color = groupCountOf(state.meta) && state.group
+        ? groupColor(state.group, state.meta.groupSeed) : state.color;
+      const fields = { text: result.text, color, column: state.column };
       if (state.editing) {
         await db.editPost(state.code, state.editing.where, state.editing.id, fields);
         stopEdit();
         setStatus("Saved! ✏️", "ok", true);
       } else {
         const name = state.meta.showNames ? cleanName(nameInput.value) : "";
-        if (groupCountOf(state.meta)) await ensureGroup();
         await db.addPost(state.code, state.meta.approval === true, { ...fields, name, group: state.group, uid: state.uid });
         input.value = "";
         setStatus(state.meta.approval
@@ -384,9 +393,12 @@ function wireChat() {
   });
 
   const nameInput = $("#chat-name");
-  nameInput.value = storageGet(CHAT_NAME_KEY) || "";
-  nameInput.addEventListener("input", () => { if (state.meta) renderChatCard(state.meta); });
-  nameInput.addEventListener("change", () => storageSet(CHAT_NAME_KEY, cleanName(nameInput.value)));
+  nameInput.value = $("#name-input").value;
+  nameInput.addEventListener("input", () => {
+    $("#name-input").value = nameInput.value;
+    if (state.meta) renderChatCard(state.meta);
+  });
+  nameInput.addEventListener("change", () => storageSet(NAME_KEY, cleanName(nameInput.value)));
   nameInput.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     e.preventDefault(); // carry on to the message instead of sending an empty one

@@ -4,7 +4,11 @@ import * as db from "./db.js";
 import { toSortedList } from "./posts.js";
 import { renderBoard, columnsOf, groupChip } from "./board.js";
 import { chatList, renderChat } from "./chat.js";
-import { MAX_GROUPS, groupCountOf, groupLabel, randomSeed } from "./groups.js";
+import { MAX_GROUPS, groupCountOf, groupLabel, groupColor, randomSeed } from "./groups.js";
+
+/** The colour a note shows: its group's colour in group mode, otherwise the one its author picked. */
+const noteColor = (note) =>
+  groupCountOf(state.meta) && note.group ? groupColor(note.group, state.meta.groupSeed) : note.color || "yellow";
 import { initThemeToggle } from "./theme.js";
 import { $, toast, show, storageGet, storageSet, boardCodeFromUrl } from "./ui.js";
 
@@ -14,6 +18,9 @@ const NOTE_SIZE_KEY = "pinboardNoteSize";
 const PANEL_KEY = "pinboardPanelHidden";
 const SIDEBAR_WIDTH_KEY = "pinboardSidebarWidth";
 const NOTE_SIZES_KEY = "pinboardNoteSizes:"; // + board code
+const TITLE_SIZE_KEY = "pinboardTitleSize";
+const TITLE_MIN = 14;
+const TITLE_MAX = 64;
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 640;
 const DEFAULT_COLUMNS = ["Went well", "To improve", "Ideas"];
@@ -256,6 +263,7 @@ function render() {
     columns,
     showNames: meta.showNames === true,
     showGroups: groupCount > 0,
+    groupColor: groupCount > 0 ? (g) => groupColor(g, meta.groupSeed) : null,
     concealed: !revealed && !state.printing,
     actions: state.isOwner ? noteActions : null,
     onOpen: openNote,
@@ -385,7 +393,7 @@ function renderPending(pending) {
 
   $("#pending-list").replaceChildren(...pending.map((note) => {
     const li = document.createElement("li");
-    li.className = `pending-item note-${note.color || "yellow"}`;
+    li.className = `pending-item note-${noteColor(note)}`;
     const text = document.createElement("p");
     text.textContent = note.text;
     const meta = document.createElement("small");
@@ -421,7 +429,7 @@ function button(label, className, onClick, title) {
 
 function openNote(note) {
   const box = $("#dialog-note");
-  box.className = `note big note-${note.color || "yellow"}`;
+  box.className = `note big note-${noteColor(note)}`;
   const text = document.createElement("p");
   text.className = "note-text";
   text.textContent = note.text;
@@ -462,6 +470,7 @@ function wireControls() {
   wireNoteSize();
   wirePanelToggle();
   wireSplitter();
+  wireTitleResize();
 
   if (!state.isOwner) return;
 
@@ -528,6 +537,61 @@ function wireNoteSize() {
   input.addEventListener("input", () => {
     apply();
     storageSet(NOTE_SIZE_KEY, input.value);
+  });
+}
+
+/** Drag (or use arrow keys on) the bar under the toolbar to make the title bigger or smaller. */
+function wireTitleResize() {
+  const board = $("#board");
+  const grip = $("#header-grip");
+  const title = $("#title");
+
+  const currentSize = () => parseFloat(getComputedStyle(title).fontSize);
+  const setSize = (px, save = true) => {
+    if (px == null) {
+      board.style.removeProperty("--title-size");
+      if (save) storageSet(TITLE_SIZE_KEY, "");
+    } else {
+      const size = Math.round(Math.min(TITLE_MAX, Math.max(TITLE_MIN, px)));
+      board.style.setProperty("--title-size", `${size}px`);
+      if (save) storageSet(TITLE_SIZE_KEY, String(size));
+    }
+    grip.setAttribute("aria-valuenow", String(Math.round(currentSize())));
+  };
+
+  const saved = Number(storageGet(TITLE_SIZE_KEY));
+  if (saved) setSize(saved, false);
+  grip.setAttribute("aria-valuemin", String(TITLE_MIN));
+  grip.setAttribute("aria-valuemax", String(TITLE_MAX));
+
+  grip.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    grip.classList.add("dragging");
+    board.classList.add("resizing-header");
+    const startY = e.clientY;
+    const startSize = currentSize();
+    const move = (ev) => setSize(startSize + (ev.clientY - startY) / 1.3, false);
+    const end = () => {
+      grip.removeEventListener("pointermove", move);
+      grip.classList.remove("dragging");
+      board.classList.remove("resizing-header");
+      setSize(currentSize());
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", end, { once: true });
+    grip.addEventListener("pointercancel", end, { once: true });
+  });
+
+  grip.addEventListener("dblclick", () => setSize(null));
+  grip.addEventListener("keydown", (e) => {
+    const step = e.shiftKey ? 8 : 2;
+    if (e.key === "ArrowDown") setSize(currentSize() + step);
+    else if (e.key === "ArrowUp") setSize(currentSize() - step);
+    else if (e.key === "Home") setSize(TITLE_MAX);
+    else if (e.key === "End") setSize(TITLE_MIN);
+    else return;
+    e.preventDefault();
   });
 }
 

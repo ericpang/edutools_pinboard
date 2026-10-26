@@ -312,8 +312,36 @@ legend { font-weight: 700; margin-bottom: 6px; padding: 0; }
 .board.resizing { cursor: col-resize; user-select: none; }
 
 .stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 10px; }
+.header-grip {
+  position: relative;
+  flex: none;
+  height: 12px;
+  margin: -6px 0;
+  cursor: row-resize;
+  touch-action: none;
+}
+.header-grip::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 48px;
+  height: 5px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: var(--border);
+  transition: background-color 0.15s, width 0.15s;
+}
+.header-grip:hover::after, .header-grip:focus-visible::after, .header-grip.dragging::after {
+  background: var(--accent);
+  width: 72px;
+}
+.header-grip:focus-visible { outline: none; }
+.board.resizing-header { cursor: row-resize; user-select: none; }
+
 .title {
-  font-size: clamp(1.4rem, 3vw, 2.4rem);
+  /* --title-size is set by dragging the grip below the toolbar */
+  font-size: var(--title-size, clamp(1.4rem, 3vw, 2.4rem));
   font-weight: 800;
   text-align: center;
   overflow-wrap: anywhere;
@@ -866,7 +894,7 @@ span.chat-react { padding: 0 2px; border-color: transparent; }
   :root { --board-bg: #fff; --note-fg: #1d1d27; --note-yellow: #fff1a8; --note-pink: #ffd3e1;
           --note-blue: #cde4ff; --note-green: #cff3d8; --note-purple: #e4daff; --note-orange: #ffdcbd; }
   body { background: #fff; color: #000; height: auto; }
-  .topbar, .sidebar, .splitter, .toolbar, .empty, .toast, .banner { display: none !important; }
+  .topbar, .sidebar, .splitter, .header-grip, .toolbar, .empty, .toast, .banner { display: none !important; }
   .board { display: block; height: auto; padding: 0; }
   .title { margin-bottom: 16px; color: #000; }
   .notes-wrap { overflow: visible; border: 0; padding: 0; background: #fff; }

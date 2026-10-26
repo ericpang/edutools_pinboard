@@ -3,6 +3,8 @@
 // gives each group exactly one slot, in an order shuffled from the board's seed. So group sizes
 // never differ by more than one, yet which group a person lands in is random.
 
+import { COLORS } from "./posts.js";
+
 export const MAX_GROUPS = 12;
 
 /** Small seeded PRNG (mulberry32) so every phone derives the same shuffle from the seed. */
@@ -41,6 +43,20 @@ export const groupLabel = (group) => `Group ${group}`;
 
 /** A distinct hue per group, spread by the golden angle so neighbours never look alike. */
 export const groupHue = (group) => Math.round(((group - 1) * 137.508 + 200) % 360);
+
+/**
+ * Note colour for a group: the palette shuffled from the board's seed, so each group gets its own
+ * random colour. With more groups than colours the palette repeats.
+ */
+export function groupColor(group, seed) {
+  const palette = [...COLORS];
+  const random = prng((seed || 0) ^ 0x5bd1e995);
+  for (let i = palette.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [palette[i], palette[j]] = [palette[j], palette[i]];
+  }
+  return palette[(group - 1) % palette.length];
+}
 
 export function randomSeed() {
   return crypto.getRandomValues(new Uint32Array(1))[0] & 0x7fffffff;
