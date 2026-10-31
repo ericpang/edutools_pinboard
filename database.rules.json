@@ -56,7 +56,7 @@
           "$postId": {
             ".write": "auth != null && root.child('boards/' + $code + '/meta/open').val() === true && ((root.child('boards/' + $code + '/meta/approval').val() !== true && ((!data.exists() && newData.child('uid').val() === auth.uid) || data.child('uid').val() === auth.uid)) || (data.child('uid').val() === auth.uid && !newData.exists()))",
             ".validate": "newData.hasChildren(['text', 'color', 'uid', 'ts'])",
-            "text": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 280" },
+            "text": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 3000" },
             "color": { ".validate": "newData.isString() && newData.val().matches(/^(yellow|pink|blue|green|purple|orange)$/)" },
             "column": { ".validate": "newData.isString() && root.child('boards/' + $code + '/meta/columns/' + newData.val()).exists()" },
             "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 30" },
@@ -75,7 +75,7 @@
           "$postId": {
             ".write": "auth != null && root.child('boards/' + $code + '/meta/open').val() === true && ((!data.exists() && newData.child('uid').val() === auth.uid && root.child('boards/' + $code + '/meta/approval').val() === true) || data.child('uid').val() === auth.uid)",
             ".validate": "newData.hasChildren(['text', 'color', 'uid', 'ts'])",
-            "text": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 280" },
+            "text": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 3000" },
             "color": { ".validate": "newData.isString() && newData.val().matches(/^(yellow|pink|blue|green|purple|orange)$/)" },
             "column": { ".validate": "newData.isString() && root.child('boards/' + $code + '/meta/columns/' + newData.val()).exists()" },
             "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 30" },

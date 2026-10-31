@@ -79,7 +79,7 @@ and shares the posts. Every browser connects directly to Firebase:
 
 | | Word Cloud | Pin Board |
 | --- | --- | --- |
-| What people send | 1–3 words | A short note (up to 280 characters) |
+| What people send | 1–3 words | A note (up to 256 words) |
 | What the screen shows | Words sized by frequency | Every note as its own card |
 | Participants see the result | No, only their own words | Yes, the live board on their phone (unless hidden) |
 | Participants can edit | No | Yes, their own notes while the board is open |
@@ -116,7 +116,7 @@ and shares the posts. Every browser connects directly to Firebase:
 
 ### Participant view (`join.html`)
 - Mobile-first layout with large tap targets
-- Shows the question and an **Add a note** form: text box (280-character limit with a counter), colour picker and, in Columns layout, a column picker
+- Shows the question and an **Add a note** form: text box (256-word limit with a counter), colour picker and, in Columns layout, a column picker
 - Optional name field, shown only when the presenter allows names. The name is remembered on that phone
 - When groups are on, first asks for **their name**, then shows **"Your group: Group N"** at the top. The note form and chat appear once they have joined
 - When group chat is on, a collapsible **Group chat** card under it lets the person talk with the others in their group, and give a 👍 to their messages. A badge counts messages they haven't read
@@ -274,7 +274,7 @@ The rules live in `database.rules.json`. They enforce:
 | Anyone | Read `meta` |
 | Anyone signed in | Read `posts` and `likes`, but `posts` **only if** the board is revealed |
 | A participant | Read **their own** notes in `posts` and `pending` at any time (query by `uid`) |
-| A participant | Create a note while `open` is true, tagged with their own `uid` and server timestamp; text 1–280 characters; colour from the palette; column must exist. It goes into `posts`, or into `pending` when approval mode is on |
+| A participant | Create a note while `open` is true, tagged with their own `uid` and server timestamp; text 1–3000 characters (the app itself limits a note to 256 words); colour from the palette; column must exist. It goes into `posts`, or into `pending` when approval mode is on |
 | A participant | Edit or delete their own note while `open` is true. In approval mode, approved notes can be deleted but not edited, so an edit can't slip past moderation. They cannot change `uid`, `ts`, `highlighted` or `hidden` |
 | A participant | Add or remove only their own like (`likes/$postId/<their uid>`), and only on a note in `posts` |
 | A participant | On a board with groups: add exactly 1 to `joinCount`, then write their own `members/<their uid>` once, with the name they gave when joining (1–30 characters; it can't be changed afterwards). A note's `group` must match their own group |
@@ -466,7 +466,8 @@ code, so a note switches correctly when the theme changes.
 `js/posts.js` applies these rules before a note is saved:
 
 1. **Trim** surrounding whitespace and collapse runs of blank lines.
-2. **Length**: 1–280 characters. Line breaks are allowed.
+2. **Length**: 1–256 words, and no more than 3000 characters. The database rules
+   can't count words, so they enforce only the character cap. Line breaks are allowed.
 3. **Plain text only**: notes are text, with no photos, files or formatting. They
    are shown with `textContent`, never as HTML, so no one can inject markup or
    scripts. Web links are shown as plain text.
@@ -500,7 +501,7 @@ pay-as-you-go **Blaze** plan.
 | `auth/operation-not-allowed` | Enable **Anonymous** sign-in in Firebase Authentication |
 | Works locally but not on GitHub Pages | Add `<user>.github.io` to Firebase **Authorized domains** |
 | `auth/requests-from-referer-…-are-blocked` | The API key has website restrictions. In Google Cloud Console → **APIs & Services → Credentials**, open the browser API key and add the address under **Website restrictions**, for example `http://localhost:8080/*`, `http://127.0.0.1:8080/*` or your LAN IP. Keep the existing entries. Changes take a few minutes |
-| `PERMISSION_DENIED` on post | The board is paused, or the note is empty or longer than 280 characters |
+| `PERMISSION_DENIED` on post | The board is paused, or the note is empty or longer than 3000 characters |
 | Participants can't see others' notes | The board is in reveal mode and hasn't been revealed yet, or notes await approval |
 | Every chat message reads *You* and sits on the right | You're testing with several tabs of one browser, which Firebase treats as one student. Open each extra student in a private window, another browser or a phone |
 | No **Group chat** card on the join page | The board has no groups, or chat is off (**💬 Chat** in the side panel). Boards made before chat existed need it switched on once |

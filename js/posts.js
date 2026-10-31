@@ -1,6 +1,9 @@
 // Note validation, filtering, colours and sorting shared by both pages.
 
-export const MAX_LEN = 280;
+export const MAX_WORDS = 256;
+// The database rules can't count words, so they cap the length in characters instead.
+// Roomy enough that 256 words of ordinary prose never reaches it.
+export const MAX_CHARS = 3000;
 export const NAME_MAX = 30;
 export const COLORS = ["yellow", "pink", "blue", "green", "purple", "orange"];
 
@@ -30,11 +33,17 @@ export function isBlocked(text) {
     .some((t) => BLOCKED_WORDS.has(t) || BLOCKED_STEMS.test(t));
 }
 
+/** Words are runs of non-space characters, so "well-known" counts as one. */
+export function countWords(text) {
+  return (String(text ?? "").match(/\S+/g) || []).length;
+}
+
 /** Validate a participant's note. Returns { ok, text } or { ok: false, error }. */
 export function validate(raw) {
   const text = normalize(raw);
   if (!text) return { ok: false, error: "Write something first." };
-  if (text.length > MAX_LEN) return { ok: false, error: `Keep it to ${MAX_LEN} characters or fewer.` };
+  if (countWords(text) > MAX_WORDS) return { ok: false, error: `Keep it to ${MAX_WORDS} words or fewer.` };
+  if (text.length > MAX_CHARS) return { ok: false, error: `Keep it to ${MAX_CHARS} characters or fewer.` };
   if (isBlocked(text)) return { ok: false, error: "Let's keep it friendly. Try rewording your note." };
   return { ok: true, text };
 }

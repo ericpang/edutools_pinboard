@@ -2,7 +2,7 @@
 // notes, see the board, like.
 
 import * as db from "./db.js";
-import { validate, cleanName, toSortedList, COLORS, MAX_LEN } from "./posts.js";
+import { validate, cleanName, toSortedList, countWords, COLORS, MAX_WORDS } from "./posts.js";
 import { renderBoard, columnsOf } from "./board.js";
 import { validateMessage, chatList, renderChat, memberLabel } from "./chat.js";
 import { groupCountOf, groupLabel, groupHue, groupColor, memberNumber } from "./groups.js";
@@ -335,10 +335,16 @@ function setStatus(text, kind, sticky = false) {
   el.dataset.sticky = sticky ? "1" : "";
 }
 
+/** Show the note's word count, in red once it's over the limit. */
+function updateCounter() {
+  const words = countWords($("#note-text").value);
+  const counter = $("#word-count");
+  counter.textContent = `${words}/${MAX_WORDS} words`;
+  counter.classList.toggle("over", words > MAX_WORDS);
+}
+
 function wireForm() {
   const input = $("#note-text");
-  const counter = $("#char-count");
-  const updateCounter = () => { counter.textContent = `${input.value.length}/${MAX_LEN}`; };
   input.addEventListener("input", () => { updateCounter(); setStatus("", ""); });
 
   $("#color-choices").replaceChildren(...COLORS.map((color) => {
@@ -487,7 +493,7 @@ function startEdit(note) {
   if (note.column) state.column = note.column;
   const input = $("#note-text");
   input.value = note.text;
-  $("#char-count").textContent = `${input.value.length}/${MAX_LEN}`;
+  updateCounter();
   setStatus("", "");
   render();
   input.focus();
@@ -498,7 +504,7 @@ function stopEdit() {
   state.editing = null;
   state.color = storageGet(COLOR_KEY) || COLORS[0];
   $("#note-text").value = "";
-  $("#char-count").textContent = `0/${MAX_LEN}`;
+  updateCounter();
   render();
 }
 
